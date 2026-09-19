@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ParaCheck — Dashboard</title>
+<meta name="description" content="Static and dynamic parallelism-conflict analysis for Monad smart contracts, demonstrated on NaiveAMM vs ShardedAMM." />
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --surface: #ffffff;
+    --border: #e2e2e6;
+    --text: #17171a;
+    --text-muted: #5b5b64;
+    --accent: #3452e1;
+    --hot: #c2540a;
+    --hot-bg: #fdf0e6;
+    --safe: #0a7a5f;
+    --safe-bg: #e9f7f2;
+    --code-bg: #f0f0f3;
+    --shadow: 0 1px 2px rgba(20, 20, 30, 0.06), 0 1px 8px rgba(20, 20, 30, 0.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121214;
+      --surface: #1b1b1f;
+      --border: #2c2c32;
+      --text: #ecebee;
+      --text-muted: #a2a2ad;
+      --accent: #7d93ff;
+      --hot: #ff9d5c;
+      --hot-bg: #2c1f14;
+      --safe: #5fd6ae;
+      --safe-bg: #103127;
+      --code-bg: #232329;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 12px rgba(0, 0, 0, 0.25);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121214;
+    --surface: #1b1b1f;
+    --border: #2c2c32;
+    --text: #ecebee;
+    --text-muted: #a2a2ad;
+    --accent: #7d93ff;
+    --hot: #ff9d5c;
+    --hot-bg: #2c1f14;
+    --safe: #5fd6ae;
+    --safe-bg: #103127;
+    --code-bg: #232329;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 12px rgba(0, 0, 0, 0.25);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding: 0 16px 64px;
+  }
+  main { max-width: 920px; margin: 0 auto; }
+  header { padding: 40px 0 24px; }
+  h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  header p { color: var(--text-muted); margin: 0; font-size: 15px; }
+  h2 { font-size: 18px; margin: 0 0 4px; }
+  section { margin: 36px 0; }
+  section > p.lead { color: var(--text-muted); margin: 4px 0 18px; font-size: 14px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .contract-name { font-weight: 600; font-size: 15px; }
+  .contract-addr {
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-muted);
+    word-break: break-all;
+  }
+  .contract-addr a { color: var(--accent); text-decoration: none; }
+  .contract-addr a:hover { text-decoration: underline; }
+
+  .score-row { display: flex; align-items: baseline; gap: 8px; margin: 12px 0 14px; }
+  .score-value { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; }
+  .score-label { color: var(--text-muted); font-size: 13px; }
+
+  .flag {
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    border: 1px solid transparent;
+  }
+  .flag.hot { background: var(--hot-bg); color: var(--hot); border-color: var(--hot); }
+  .flag-slot { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
+  .flag-detail { color: var(--text); opacity: 0.85; margin-top: 4px; }
+  .no-flags { color: var(--safe); font-size: 13px; font-weight: 600; }
+  .safe-list { margin: 0 0 14px; padding: 0; list-style: none; }
+  .safe-list li {
+    color: var(--safe); font-size: 13px; font-weight: 600;
+    padding: 6px 0; border-bottom: 1px solid var(--border);
+  }
+  .safe-list li:last-child { border-bottom: none; }
+  .safe-list li::before { content: "✓ "; }
+  .section-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-muted); margin: 14px 0 6px;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  .bar-row { margin: 14px 0; }
+  .bar-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+  .bar-track { background: var(--code-bg); border-radius: 6px; height: 22px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; min-width: 2px; transition: width 0.4s ease; }
+  .bar-fill.hot { background: var(--hot); }
+  .bar-fill.safe { background: var(--safe); }
+  .dynamic-note {
+    font-size: 13px; color: var(--text-muted); margin-top: 16px;
+    border-top: 1px solid var(--border); padding-top: 12px;
+  }
+
+  .livetx-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  select, input[type="text"] {
+    background: var(--code-bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 14px;
+  }
+  button {
+    background: var(--accent); color: white; border: none; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #livetx-status { font-size: 13px; margin-top: 10px; }
+  #livetx-status a { color: var(--accent); }
+  .status-pending { color: var(--text-muted); }
+  .status-ok { color: var(--safe); }
+  .status-error { color: var(--hot); }
+
+  footer {
+    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border);
+    color: var(--text-muted); font-size: 13px;
+  }
+  footer a { color: var(--accent); }
+  footer ul { padding-left: 18px; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ParaCheck</h1>
+    <p>Static + dynamic parallelism-conflict analysis for Monad smart contracts, proven on two live demo AMMs.</p>
+  </header>
+
+  <section id="static-section">
+    <h2>Static analysis</h2>
+    <p class="lead">Storage read/write patterns extracted via Slither, classified as hot (conflict-prone) or safe.</p>
+    <div class="grid-2" id="static-cards">
+      <div class="card">Loading…</div>
+      <div class="card">Loading…</div>
+    </div>
+  </section>
+
+  <section id="dynamic-section">
+    <h2>Dynamic analysis (measured)</h2>
+    <p class="lead">Real transactions, real <code>debug_traceBlockByNumber</code> storage diffs — not inferred from latency.</p>
+    <div class="card" id="dynamic-card">Loading…</div>
+  </section>
+
+  <section id="livetx-section">
+    <h2>Fire a live transaction</h2>
+    <p class="lead">Sends a genuine new swap to the deployed contract right now and confirms it on Monad Testnet.</p>
+    <div class="card">
+      <div class="livetx-controls">
+        <select id="livetx-contract">
+          <option value="naive">NaiveAMM</option>
+          <option value="sharded">ShardedAMM</option>
+        </select>
+        <input type="text" id="livetx-amount" value="10" size="6" aria-label="amount (token units)" />
+        <button id="livetx-button">Fire live swap</button>
+      </div>
+      <div id="livetx-status"></div>
+    </div>
+  </section>
+
+  <footer id="footer">
+    <p>Loading deployment info…</p>
+  </footer>
+</main>
+
+<script>
+async function loadJson(path) {
+  const res = await fetch(path, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load ${path}: ${res.status}`);
+  return res.json();
+}
+
+function renderStaticCard(report) {
+  const el = document.createElement("div");
+  el.className = "card";
+
+  if (report.unanalyzable) {
+    el.innerHTML = `
+      <div class="contract-name">${report.contract}</div>
+      <p class="flag hot">${report.reason || "This contract contains constructs that couldn't be statically analyzed - manual review recommended"}</p>
+    `;
+    return el;
+  }
+
+  const scoreColor = report.parallelismScore >= 70 ? "var(--safe)" : report.parallelismScore >= 30 ? "var(--accent)" : "var(--hot)";
+  const safeFunctions = report.safeFunctions || [];
+
+  const safeHtml = safeFunctions.length
+    ? `<div class="section-label">Safe — no hot-slot touches</div>
+       <ul class="safe-list">${safeFunctions.map(fn => `<li>${fn}()</li>`).join("")}</ul>`
+    : "";
+
+  const flagsHtml = report.flags.length
+    ? `<div class="section-label">Hot — flagged for conflicts</div>
+       ${report.flags.map(f => `
+        <div class="flag hot">
+          <span class="flag-slot">${f.slot}</span> — touched by ${f.touchedBy.join(", ")}
+          <div class="flag-detail">${f.suggestedFix}</div>
+        </div>`).join("")}`
+    : `<p class="no-flags">No hot slots flagged.</p>`;
+
+  el.innerHTML = `
+    <div class="contract-name">${report.contract}</div>
+    <div class="score-row">
+      <span class="score-value" style="color:${scoreColor}">${report.parallelismScore}</span>
+      <span class="score-label">/ 100 parallelism score<br>(share of state-changing functions with no hot-slot touch)</span>
+    </div>
+    ${safeHtml}
+    ${flagsHtml}
+  `;
+  return el;
+}
+
+function renderBar(container, label, value, max, kind) {
+  const row = document.createElement("div");
+  row.className = "bar-row";
+  const pct = max > 0 ? Math.max((value / max) * 100, value > 0 ? 3 : 0) : 0;
+  row.innerHTML = `
+    <div class="bar-label"><span>${label}</span><span>${value} conflicting slot${value === 1 ? "" : "s"}</span></div>
+    <div class="bar-track"><div class="bar-fill ${kind}" style="width:${pct}%"></div></div>
+  `;
+  container.appendChild(row);
+}
+
+function renderDynamicCard(report) {
+  const el = document.getElementById("dynamic-card");
+  if (!report) {
+    el.innerHTML = `<p class="lead">No dynamic report yet — run <code>paracheck loadtest</code> to generate demo-page/reports/dynamic-comparison.json.</p>`;
+    return;
+  }
+
+  const naive = report.naiveAMM.ammReport;
+  const sharded = report.shardedAMM.ammReport;
+  const max = Math.max(naive.conflictingSlots, sharded.conflictingSlots, 1);
+
+  el.innerHTML = "";
+  const title = document.createElement("p");
+  title.className = "lead";
+  title.style.margin = "0 0 4px";
+  title.textContent = `${report.naiveAMM.fullReport.totalTransactions} concurrent swaps fired at each contract, traced in the same block window.`;
+  el.appendChild(title);
+
+  renderBar(el, "NaiveAMM", naive.conflictingSlots, max, "hot");
+  renderBar(el, `ShardedAMM (${report.shardedAMM.bandCount} bands)`, sharded.conflictingSlots, max, "safe");
+
+  const note = document.createElement("div");
+  note.className = "dynamic-note";
+  note.innerHTML = `Conflict count = (contract address, storage slot) pairs written by more than one transaction in the block, scoped to each AMM's own storage (matches what the static analyzer evaluates). The full cross-contract trace also shows every swap touching the ERC20 token contracts' own <code>balanceOf(AMM)</code> slot — that's inherent to ERC20 accounting, not something either AMM's own storage layout can fix.`;
+  el.appendChild(note);
+}
+
+function renderFooter(deployment) {
+  const el = document.getElementById("footer");
+  if (!deployment) {
+    el.innerHTML = `<p>Deployment info not yet generated.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <p>
+      NaiveAMM: <a href="${deployment.naiveAMM.monadscanUrl}" target="_blank" rel="noopener">${deployment.naiveAMM.address}</a><br>
+      ShardedAMM: <a href="${deployment.shardedAMM.monadscanUrl}" target="_blank" rel="noopener">${deployment.shardedAMM.address}</a>
+    </p>
+    <p><strong>Known limitations</strong></p>
+    <ul>
+      <li>The static pass detects known hot-slot patterns via Slither's read/write extraction; contracts with heavy inline assembly or delegatecall-based storage indirection are flagged "not fully analyzable" rather than silently passed as safe.</li>
+      <li>Dynamic conflict counts are real, measured data from prestateTracer diffs - not inferred from latency - but reflect the specific load pattern tested, not a general prediction for arbitrary future usage.</li>
+      <li>ShardedAMM's price-banding is a simplified, parameterized illustrative fix, not production-grade concentrated-liquidity math.</li>
+      <li>Every swap still writes the paired ERC20 tokens' own balanceOf(AMM) slot regardless of band - band-sharding removes conflicts on the AMM's own reserve accounting, not on the token contracts it calls into.</li>
+    </ul>
+    <p>
+      <a href="https://github.com/kodykebab/venus" target="_blank" rel="noopener" id="repo-link">Source on GitHub</a>
+      · <a href="./">Back to overview</a>
+    </p>
+  `;
+}
+
+async function fireLiveTx() {
+  const button = document.getElementById("livetx-button");
+  const status = document.getElementById("livetx-status");
+  const contract = document.getElementById("livetx-contract").value;
+  const amount = document.getElementById("livetx-amount").value || "10";
+
+  button.disabled = true;
+  status.className = "status-pending";
+  status.textContent = "Sending transaction…";
+
+  try {
+    const res = await fetch("/api/livetx", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contract, amount }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `request failed: ${res.status}`);
+
+    status.className = "status-ok";
+    status.innerHTML = `Confirmed in block ${data.blockNumber} — <a href="${data.monadscanUrl}" target="_blank" rel="noopener">${data.txHash}</a>`;
+  } catch (err) {
+    status.className = "status-error";
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function init() {
+  try {
+    const [naiveStatic, shardedStatic] = await Promise.all([
+      loadJson("reports/static-naiveamm.json"),
+      loadJson("reports/static-shardedamm.json"),
+    ]);
+    const container = document.getElementById("static-cards");
+    container.innerHTML = "";
+    container.appendChild(renderStaticCard(naiveStatic));
+    container.appendChild(renderStaticCard(shardedStatic));
+  } catch (err) {
+    document.getElementById("static-cards").innerHTML = `<div class="card">Static reports unavailable: ${err.message}</div>`;
+  }
+
+  try {
+    renderDynamicCard(await loadJson("reports/dynamic-comparison.json"));
+  } catch (err) {
+    renderDynamicCard(null);
+  }
+
+  try {
+    renderFooter(await loadJson("reports/deployment.json"));
+  } catch (err) {
+    renderFooter(null);
+  }
+
+  document.getElementById("livetx-button").addEventListener("click", fireLiveTx);
+}
+
+init();
+</script>
+</body>
+</html>
