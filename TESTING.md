@@ -22,9 +22,31 @@ Expect `6 passed` — three hand-written fixtures (global counter → hot, per-u
 safe, inline assembly → `unanalyzable` not a crash) plus regression checks against the
 real `NaiveAMM`/`ShardedAMM`.
 
-Run it against a contract directly:
+Run it directly against the example fixture contracts in `analyzer/static/fixtures/`
+(these are the hand-written known-correct cases the pytest suite above checks against):
+
 ```bash
-python3 report.py <foundry-project-dir> <ContractName> <path/to/Contract.sol>
+cd analyzer/static
+PATH="$HOME/.foundry/bin:.venv/bin:$PATH" .venv/bin/python3 report.py \
+  fixtures/GlobalCounter.sol GlobalCounter fixtures/GlobalCounter.sol
+# -> parallelismScore: 0, "count" flagged hot (touched by increment + incrementBy)
+
+.venv/bin/python3 report.py \
+  fixtures/PerUserMapping.sol PerUserMapping fixtures/PerUserMapping.sol
+# -> parallelismScore: 100, no flags (mapping indexed by msg.sender)
+
+.venv/bin/python3 report.py \
+  fixtures/InlineAssemblyContract.sol InlineAssemblyContract fixtures/InlineAssemblyContract.sol
+# -> unanalyzable: true, "manual review recommended" - never a crash
+```
+
+Or against the real demo contracts (a Foundry project path + contract name + source file):
+```bash
+.venv/bin/python3 report.py ../../contracts NaiveAMM ../../contracts/src/NaiveAMM.sol
+# -> parallelismScore: 0, reserve0/reserve1 both hot (touched by addLiquidity + swap)
+
+.venv/bin/python3 report.py ../../contracts ShardedAMM ../../contracts/src/ShardedAMM.sol
+# -> parallelismScore: 50, safeFunctions: ["swap"], only addLiquidity flagged hot
 ```
 
 ## 3. Dynamic analyzer (local, no testnet needed)
