@@ -1,0 +1,12 @@
+{
+  "python": {
+    "venv": "analyzer/.venv",
+    "foundryBin": "~/.foundry/bin"
+  },
+  "solc": {
+    "version": "0.8.24"
+  },
+  "chainId": 10143,
+  "defaultLoadtestTraders": 5,
+  "defaultBands": 3
+}

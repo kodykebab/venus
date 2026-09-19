@@ -71,6 +71,23 @@ def load_contract(project_path: str, contract_name: str, source_file: str, found
     return contract
 
 
+def load_all_contracts(source_file: str, solc: str | None = None) -> list[Contract]:
+    """Loads every top-level `contract` (not interface/library) in a single, importless
+    source file - for ad-hoc CLI/upload use where there's no Foundry project and no
+    single contract name to target. Raises UnanalyzableContract on any failure or
+    inline assembly, same as load_contract."""
+    if has_inline_assembly(source_file):
+        raise UnanalyzableContract()
+
+    try:
+        kwargs = {"solc": solc} if solc else {}
+        slither = Slither(source_file, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - crytic-compile/Slither raise many exception types
+        raise UnanalyzableContract(f"{UNANALYZABLE_MESSAGE} (compile error: {exc})") from exc
+
+    return [c for c in slither.contracts if c.contract_kind == "contract"]
+
+
 def _is_mapping_or_array(variable: StateVariable) -> bool:
     return isinstance(variable.type, (MappingType, ArrayType))
 

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# ParaCheck CLI wrapper.
+#
+#   paracheck <file>.sol [--solc PATH] [--out FILE]   analyze a single self-contained
+#                                                      Solidity file (no imports)
+#   paracheck analyze|loadtest|livetx|deployment-info  forwards to analyzer/cli.ts
+#
+# Shared, non-secret defaults live in paracheck.json (repo root). Secrets (RPC_URL,
+# private keys) stay in .env / your shell environment - never put them in paracheck.json,
+# it's committed to the repo.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/paracheck.json"
+
+json_get() {
+  # json_get <jq-path> <default>
+  if command -v jq >/dev/null 2>&1; then
+    jq -r "$1 // \"$2\"" "$CONFIG_FILE"
+  else
+    python3 -c "
+import json, sys
+path = sys.argv[1].lstrip('.').split('.')
+try:
+    d = json.load(open(sys.argv[2]))
+    for p in path:
+        d = d[p]
+    print(d)
+except Exception:
+    print(sys.argv[3])
+" "$1" "$CONFIG_FILE" "$2"
+  fi
+}
+
+PY_VENV="$(json_get '.python.venv' 'analyzer/.venv')"
+FOUNDRY_BIN="$(json_get '.python.foundryBin' '~/.foundry/bin')"
+FOUNDRY_BIN="${FOUNDRY_BIN/#\~/$HOME}"
+CHAIN_ID_DEFAULT="$(json_get '.chainId' '10143')"
+
+if [ "$#" -eq 0 ]; then
+  echo "Usage: paracheck <file>.sol | paracheck analyze|loadtest|livetx|deployment-info [options]" >&2
+  exit 1
+fi
+
+export PATH="$FOUNDRY_BIN:$SCRIPT_DIR/$PY_VENV/bin:$PATH"
+
+if [[ "$1" == *.sol ]]; then
+  SOL_FILE="$1"
+  shift
+  exec "$SCRIPT_DIR/$PY_VENV/bin/python3" "$SCRIPT_DIR/analyzer/static/analyze_file.py" "$SOL_FILE" "$@"
+else
+  export CHAIN_ID="${CHAIN_ID:-$CHAIN_ID_DEFAULT}"
+  cd "$SCRIPT_DIR/analyzer"
+  exec npx tsx cli.ts "$@"
+fi
