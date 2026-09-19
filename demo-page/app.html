@@ -4,194 +4,238 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ParaCheck — Dashboard</title>
-<meta name="description" content="Static and dynamic parallelism-conflict analysis for Monad smart contracts, demonstrated on NaiveAMM vs ShardedAMM." />
+<meta name="description" content="Full technical detail: raw static and dynamic parallelism-conflict analysis for NaiveAMM and ShardedAMM on Monad Testnet." />
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
   :root {
-    --bg: #f7f7f8;
-    --surface: #ffffff;
-    --border: #e2e2e6;
-    --text: #17171a;
-    --text-muted: #5b5b64;
-    --accent: #3452e1;
-    --hot: #c2540a;
-    --hot-bg: #fdf0e6;
-    --safe: #0a7a5f;
-    --safe-bg: #e9f7f2;
-    --code-bg: #f0f0f3;
-    --shadow: 0 1px 2px rgba(20, 20, 30, 0.06), 0 1px 8px rgba(20, 20, 30, 0.04);
+    --bg: #faf9f7; --surface: #ffffff; --ink: #14130f; --ink-muted: #5c584e;
+    --rule: #ddd9cf; --accent: #d6300b; --good: #0b8f6e; --chip-bg: #f1efe8;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #121214;
-      --surface: #1b1b1f;
-      --border: #2c2c32;
-      --text: #ecebee;
-      --text-muted: #a2a2ad;
-      --accent: #7d93ff;
-      --hot: #ff9d5c;
-      --hot-bg: #2c1f14;
-      --safe: #5fd6ae;
-      --safe-bg: #103127;
-      --code-bg: #232329;
-      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 12px rgba(0, 0, 0, 0.25);
+      --bg: #141412; --surface: #1b1a17; --ink: #f4f2ec; --ink-muted: #a49f92;
+      --rule: #34322c; --accent: #e85a38; --good: #22a67f; --chip-bg: #232019;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #121214;
-    --surface: #1b1b1f;
-    --border: #2c2c32;
-    --text: #ecebee;
-    --text-muted: #a2a2ad;
-    --accent: #7d93ff;
-    --hot: #ff9d5c;
-    --hot-bg: #2c1f14;
-    --safe: #5fd6ae;
-    --safe-bg: #103127;
-    --code-bg: #232329;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 12px rgba(0, 0, 0, 0.25);
+    --bg: #141412; --surface: #1b1a17; --ink: #f4f2ec; --ink-muted: #a49f92;
+    --rule: #34322c; --accent: #e85a38; --good: #22a67f; --chip-bg: #232019;
   }
 
   * { box-sizing: border-box; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    padding: 0 16px 64px;
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, sans-serif;
+    padding: 0 20px;
   }
-  main { max-width: 920px; margin: 0 auto; }
-  header { padding: 40px 0 24px; }
-  h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
-  header p { color: var(--text-muted); margin: 0; font-size: 15px; }
-  h2 { font-size: 18px; margin: 0 0 4px; }
-  section { margin: 36px 0; }
-  section > p.lead { color: var(--text-muted); margin: 4px 0 18px; font-size: 14px; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding-bottom: 80px; }
+  h1, h2, h3, .display {
+    font-family: "Archivo", -apple-system, sans-serif; font-weight: 900;
+    letter-spacing: -0.02em; text-wrap: balance; margin: 0;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  a { color: var(--accent); }
 
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: var(--shadow);
+  .topbar {
+    position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 0; background: var(--bg); border-bottom: 1px solid var(--rule); z-index: 10;
   }
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .wordmark { font-family: "Archivo"; font-weight: 900; font-size: 17px; }
+  .wordmark span { color: var(--accent); }
+  .topnav { display: flex; gap: 20px; font-size: 13px; font-weight: 600; }
+  .topnav a { text-decoration: none; color: var(--ink-muted); }
+  .topnav a:hover { color: var(--ink); }
+  @media (max-width: 640px) { .topnav { display: none; } }
+
+  .hero { padding: 44px 0 8px; }
+  .eyebrow {
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--accent); margin-bottom: 14px;
+  }
+  h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.05; }
+  .hero-sub { font-size: 15.5px; color: var(--ink-muted); margin-top: 14px; line-height: 1.6; max-width: 620px; }
+
+  section { padding: 40px 0; border-top: 1px solid var(--rule); }
+  .row { display: grid; grid-template-columns: 150px 1fr; gap: 30px; }
+  @media (max-width: 720px) { .row { grid-template-columns: 1fr; gap: 14px; } }
+  .sec-label {
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--ink-muted); line-height: 1.4;
+  }
+  section h2 { font-size: clamp(20px, 2.8vw, 27px); line-height: 1.15; max-width: 640px; }
+  .lead { font-size: 14px; color: var(--ink-muted); margin-top: 10px; line-height: 1.6; max-width: 600px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
   @media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 18px; }
+  .contract-name { font-family: "IBM Plex Mono"; font-weight: 500; font-size: 14px; }
+  .score-row { display: flex; align-items: baseline; gap: 10px; margin: 10px 0 12px; }
+  .score-num { font-family: "Archivo"; font-weight: 900; font-size: 36px; }
+  .score-label { font-size: 12px; color: var(--ink-muted); max-width: 220px; line-height: 1.4; }
 
-  .contract-name { font-weight: 600; font-size: 15px; }
-  .contract-addr {
-    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-    color: var(--text-muted);
+  .flag-group-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-muted); margin: 14px 0 6px;
+  }
+  .flag-group-label:first-of-type { margin-top: 0; }
+  .flag-card { background: var(--chip-bg); border: 1px solid var(--rule); border-radius: 4px; padding: 10px 12px; margin-top: 6px; }
+  .flag-card.safe { border-color: var(--good); }
+  .flag-title { font-family: "IBM Plex Mono"; font-size: 12.5px; }
+  .flag-title .hot { color: var(--accent); }
+  .flag-title .good { color: var(--good); }
+  .flag-sub { font-size: 12px; color: var(--ink-muted); margin-top: 4px; line-height: 1.5; }
+
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--rule); border: 1px solid var(--rule); margin-top: 18px; border-radius: 4px; overflow: hidden;
+  }
+  @media (max-width: 640px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--surface); padding: 14px 16px; }
+  .stat-value { font-family: "Archivo"; font-weight: 800; font-size: 22px; line-height: 1; }
+  .stat-label { font-size: 11px; color: var(--ink-muted); margin-top: 5px; line-height: 1.3; }
+
+  .bar-row { display: grid; grid-template-columns: 150px 1fr 90px; align-items: center; gap: 14px; margin-top: 14px; }
+  .bar-row-label { font-size: 13px; font-weight: 600; }
+  .bar-track { height: 18px; background: var(--chip-bg); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; }
+  .bar-fill.hot { background: var(--accent); }
+  .bar-fill.good { background: var(--good); }
+  .bar-num { font-family: "IBM Plex Mono"; font-size: 13px; text-align: right; }
+
+  table.slot-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+  table.slot-table th, table.slot-table td {
+    text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule);
+  }
+  table.slot-table th { color: var(--ink-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  table.slot-table td.addr { font-family: "IBM Plex Mono"; word-break: break-all; }
+  table.slot-table td.count { font-family: "IBM Plex Mono"; text-align: right; }
+  .slot-table-wrap { max-height: 320px; overflow-y: auto; overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; margin-top: 12px; }
+  details summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink-muted); margin-top: 16px; }
+  details summary:hover { color: var(--ink); }
+
+  .addr-chip {
+    display: block; font-family: "IBM Plex Mono"; font-size: 12.5px; background: var(--chip-bg);
+    border-radius: 3px; padding: 10px 12px; margin-top: 8px; text-decoration: none; color: var(--ink);
     word-break: break-all;
   }
-  .contract-addr a { color: var(--accent); text-decoration: none; }
-  .contract-addr a:hover { text-decoration: underline; }
+  .addr-chip .tag { color: var(--ink-muted); display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 3px; }
+  .addr-chip:hover { background: var(--rule); }
 
-  .score-row { display: flex; align-items: baseline; gap: 8px; margin: 12px 0 14px; }
-  .score-value { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; }
-  .score-label { color: var(--text-muted); font-size: 13px; }
-
-  .flag {
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
-    font-size: 13px;
-    border: 1px solid transparent;
-  }
-  .flag.hot { background: var(--hot-bg); color: var(--hot); border-color: var(--hot); }
-  .flag-slot { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
-  .flag-detail { color: var(--text); opacity: 0.85; margin-top: 4px; }
-  .no-flags { color: var(--safe); font-size: 13px; font-weight: 600; }
-  .safe-list { margin: 0 0 14px; padding: 0; list-style: none; }
-  .safe-list li {
-    color: var(--safe); font-size: 13px; font-weight: 600;
-    padding: 6px 0; border-bottom: 1px solid var(--border);
-  }
-  .safe-list li:last-child { border-bottom: none; }
-  .safe-list li::before { content: "✓ "; }
-  .section-label {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
-    color: var(--text-muted); margin: 14px 0 6px;
-  }
-  .section-label:first-of-type { margin-top: 0; }
-
-  .bar-row { margin: 14px 0; }
-  .bar-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
-  .bar-track { background: var(--code-bg); border-radius: 6px; height: 22px; overflow: hidden; }
-  .bar-fill { height: 100%; border-radius: 6px; min-width: 2px; transition: width 0.4s ease; }
-  .bar-fill.hot { background: var(--hot); }
-  .bar-fill.safe { background: var(--safe); }
-  .dynamic-note {
-    font-size: 13px; color: var(--text-muted); margin-top: 16px;
-    border-top: 1px solid var(--border); padding-top: 12px;
-  }
-
-  .livetx-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .livetx-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
   select, input[type="text"] {
-    background: var(--code-bg); color: var(--text); border: 1px solid var(--border);
-    border-radius: 8px; padding: 8px 10px; font-size: 14px;
+    font-family: "IBM Plex Sans"; background: var(--chip-bg); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 3px; padding: 10px 12px; font-size: 14px;
   }
-  button {
-    background: var(--accent); color: white; border: none; border-radius: 8px;
-    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+  button.btn {
+    font-family: "IBM Plex Sans"; font-weight: 700; font-size: 14px; cursor: pointer;
+    padding: 12px 20px; border-radius: 3px; border: 1px solid var(--ink);
+    background: var(--ink); color: var(--bg);
   }
-  button:disabled { opacity: 0.6; cursor: default; }
-  #livetx-status { font-size: 13px; margin-top: 10px; }
-  #livetx-status a { color: var(--accent); }
-  .status-pending { color: var(--text-muted); }
-  .status-ok { color: var(--safe); }
-  .status-error { color: var(--hot); }
+  button.btn:disabled { opacity: 0.55; cursor: default; }
+  #livetx-status { font-size: 13px; margin-top: 12px; }
+  .status-pending { color: var(--ink-muted); }
+  .status-ok { color: var(--good); font-weight: 600; }
+  .status-error { color: var(--accent); font-weight: 600; }
 
-  footer {
-    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border);
-    color: var(--text-muted); font-size: 13px;
-  }
-  footer a { color: var(--accent); }
-  footer ul { padding-left: 18px; }
-  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+  footer { padding: 40px 0 20px; }
+  footer ul { padding-left: 18px; font-size: 13px; color: var(--ink-muted); line-height: 1.7; }
+  footer .footer-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 20px; font-size: 13px; }
+  code { background: var(--chip-bg); padding: 1px 5px; border-radius: 3px; font-size: 0.92em; font-family: "IBM Plex Mono"; }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>ParaCheck</h1>
-    <p>Static + dynamic parallelism-conflict analysis for Monad smart contracts, proven on two live demo AMMs.</p>
-  </header>
+<div class="wrap">
+  <div class="topbar">
+    <div class="wordmark">PARA<span>CHECK</span></div>
+    <nav class="topnav">
+      <a href="./">Overview</a>
+      <a href="./upload.html">Analyze yours</a>
+    </nav>
+  </div>
+
+  <div class="hero">
+    <div class="eyebrow">Full technical detail</div>
+    <h1>Dashboard</h1>
+    <p class="hero-sub">
+      Every number the overview page summarizes, unrounded: raw static-analysis flags,
+      full dynamic trace data down to individual storage slots, and both contracts'
+      addresses. This is the page to check if you don't want to take the headline
+      numbers on faith.
+    </p>
+  </div>
 
   <section id="static-section">
-    <h2>Static analysis</h2>
-    <p class="lead">Storage read/write patterns extracted via Slither, classified as hot (conflict-prone) or safe.</p>
-    <div class="grid-2" id="static-cards">
-      <div class="card">Loading…</div>
-      <div class="card">Loading…</div>
+    <div class="row">
+      <div class="sec-label">Static analysis</div>
+      <div>
+        <h2>Storage read/write patterns, extracted via Slither</h2>
+        <p class="lead">Classified hot (conflict-prone) or safe per function - not just per slot. See <a href="./upload.html">upload.html</a> to run this against your own contract.</p>
+        <div class="grid-2" id="static-cards">
+          <div class="card">Loading…</div>
+          <div class="card">Loading…</div>
+        </div>
+      </div>
     </div>
   </section>
 
   <section id="dynamic-section">
-    <h2>Dynamic analysis (measured)</h2>
-    <p class="lead">Real transactions, real <code>debug_traceBlockByNumber</code> storage diffs — not inferred from latency.</p>
-    <div class="card" id="dynamic-card">Loading…</div>
+    <div class="row">
+      <div class="sec-label">Dynamic analysis</div>
+      <div>
+        <h2>Real transactions, real storage diffs</h2>
+        <p class="lead">Measured via <code>debug_traceBlockByNumber</code> + <code>prestateTracer</code>/diffMode - not inferred from latency or throughput.</p>
+        <div class="card" id="dynamic-card">Loading…</div>
+      </div>
+    </div>
   </section>
 
   <section id="livetx-section">
-    <h2>Fire a live transaction</h2>
-    <p class="lead">Sends a genuine new swap to the deployed contract right now and confirms it on Monad Testnet.</p>
-    <div class="card">
-      <div class="livetx-controls">
-        <select id="livetx-contract">
-          <option value="naive">NaiveAMM</option>
-          <option value="sharded">ShardedAMM</option>
-        </select>
-        <input type="text" id="livetx-amount" value="10" size="6" aria-label="amount (token units)" />
-        <button id="livetx-button">Fire live swap</button>
+    <div class="row">
+      <div class="sec-label">Live transaction</div>
+      <div>
+        <h2>Fire a live transaction</h2>
+        <p class="lead">Sends a genuinely new swap to the deployed contract right now and confirms it on Monad Testnet - not a replay.</p>
+        <div class="card">
+          <div class="livetx-controls">
+            <select id="livetx-contract">
+              <option value="naive">NaiveAMM</option>
+              <option value="sharded">ShardedAMM</option>
+            </select>
+            <input type="text" id="livetx-amount" value="10" size="6" aria-label="amount (token units)" />
+            <button class="btn" id="livetx-button" type="button">Fire live swap</button>
+          </div>
+          <div id="livetx-status"></div>
+        </div>
       </div>
-      <div id="livetx-status"></div>
+    </div>
+  </section>
+
+  <section id="deployment-section">
+    <div class="row">
+      <div class="sec-label">Deployment</div>
+      <div>
+        <h2>Contract addresses</h2>
+        <p class="lead">Deployed and source-verified on Monad Testnet, chain <span class="mono">10143</span>.</p>
+        <div id="addr-list">Loading…</div>
+      </div>
     </div>
   </section>
 
   <footer id="footer">
-    <p>Loading deployment info…</p>
+    <div class="row">
+      <div class="sec-label">Limitations</div>
+      <div>
+        <ul id="limitations-list"></ul>
+        <div class="footer-links">
+          <a href="https://github.com/kodykebab/venus" target="_blank" rel="noopener">Source on GitHub</a>
+          <a href="./">Back to overview</a>
+          <a href="./upload.html">Analyze your own contract</a>
+        </div>
+      </div>
+    </div>
   </footer>
-</main>
+</div>
 
 <script>
 async function loadJson(path) {
@@ -207,33 +251,33 @@ function renderStaticCard(report) {
   if (report.unanalyzable) {
     el.innerHTML = `
       <div class="contract-name">${report.contract}</div>
-      <p class="flag hot">${report.reason || "This contract contains constructs that couldn't be statically analyzed - manual review recommended"}</p>
+      <div class="flag-card"><div class="flag-title hot">${report.reason || "unanalyzable"}</div></div>
     `;
     return el;
   }
 
-  const scoreColor = report.parallelismScore >= 70 ? "var(--safe)" : report.parallelismScore >= 30 ? "var(--accent)" : "var(--hot)";
+  const scoreColor = report.parallelismScore >= 70 ? "var(--good)" : "var(--accent)";
   const safeFunctions = report.safeFunctions || [];
 
   const safeHtml = safeFunctions.length
-    ? `<div class="section-label">Safe — no hot-slot touches</div>
-       <ul class="safe-list">${safeFunctions.map(fn => `<li>${fn}()</li>`).join("")}</ul>`
+    ? `<div class="flag-group-label">Safe — no hot-slot touches</div>
+       ${safeFunctions.map(fn => `<div class="flag-card safe"><div class="flag-title"><span class="good">${fn}()</span></div></div>`).join("")}`
     : "";
 
   const flagsHtml = report.flags.length
-    ? `<div class="section-label">Hot — flagged for conflicts</div>
+    ? `<div class="flag-group-label">Hot — flagged for conflicts</div>
        ${report.flags.map(f => `
-        <div class="flag hot">
-          <span class="flag-slot">${f.slot}</span> — touched by ${f.touchedBy.join(", ")}
-          <div class="flag-detail">${f.suggestedFix}</div>
+        <div class="flag-card">
+          <div class="flag-title"><span class="hot">${f.slot}</span> — touched by ${f.touchedBy.join(", ")}</div>
+          <div class="flag-sub">${f.suggestedFix}</div>
         </div>`).join("")}`
-    : `<p class="no-flags">No hot slots flagged.</p>`;
+    : "";
 
   el.innerHTML = `
     <div class="contract-name">${report.contract}</div>
     <div class="score-row">
-      <span class="score-value" style="color:${scoreColor}">${report.parallelismScore}</span>
-      <span class="score-label">/ 100 parallelism score<br>(share of state-changing functions with no hot-slot touch)</span>
+      <span class="score-num" style="color:${scoreColor}">${report.parallelismScore}</span>
+      <span class="score-label">/100 parallelism score — share of state-changing functions with no hot-slot touch</span>
     </div>
     ${safeHtml}
     ${flagsHtml}
@@ -241,68 +285,87 @@ function renderStaticCard(report) {
   return el;
 }
 
-function renderBar(container, label, value, max, kind) {
-  const row = document.createElement("div");
-  row.className = "bar-row";
-  const pct = max > 0 ? Math.max((value / max) * 100, value > 0 ? 3 : 0) : 0;
-  row.innerHTML = `
-    <div class="bar-label"><span>${label}</span><span>${value} conflicting slot${value === 1 ? "" : "s"}</span></div>
-    <div class="bar-track"><div class="bar-fill ${kind}" style="width:${pct}%"></div></div>
-  `;
-  container.appendChild(row);
+function renderSlotTable(slotWriterCounts) {
+  const rows = Object.entries(slotWriterCounts || {}).sort((a, b) => b[1] - a[1]);
+  if (!rows.length) return "";
+  return `
+    <details>
+      <summary>${rows.length} storage slot${rows.length === 1 ? "" : "s"} touched (raw trace data)</summary>
+      <div class="slot-table-wrap">
+        <table class="slot-table">
+          <thead><tr><th>address:slot</th><th>writers</th></tr></thead>
+          <tbody>
+            ${rows.map(([slot, count]) => `<tr><td class="addr">${slot}</td><td class="count">${count}</td></tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </details>`;
 }
 
 function renderDynamicCard(report) {
   const el = document.getElementById("dynamic-card");
   if (!report) {
-    el.innerHTML = `<p class="lead">No dynamic report yet — run <code>paracheck loadtest</code> to generate demo-page/reports/dynamic-comparison.json.</p>`;
+    el.innerHTML = `<p class="lead" style="margin-top:0;">No dynamic report yet — run <code>paracheck loadtest</code> to generate demo-page/reports/dynamic-comparison.json.</p>`;
     return;
   }
 
   const naive = report.naiveAMM.ammReport;
   const sharded = report.shardedAMM.ammReport;
+  const naiveFull = report.naiveAMM.fullReport;
+  const sharedFull = report.shardedAMM.fullReport;
   const max = Math.max(naive.conflictingSlots, sharded.conflictingSlots, 1);
 
-  el.innerHTML = "";
-  const title = document.createElement("p");
-  title.className = "lead";
-  title.style.margin = "0 0 4px";
-  title.textContent = `${report.naiveAMM.fullReport.totalTransactions} concurrent swaps fired at each contract, traced in the same block window.`;
-  el.appendChild(title);
+  el.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-value">${naiveFull.totalTransactions}</div><div class="stat-label">NaiveAMM: txs in traced block(s)</div></div>
+      <div class="stat"><div class="stat-value">${naive.conflictingTransactionPairs}</div><div class="stat-label">NaiveAMM: conflicting tx pairs (own storage)</div></div>
+      <div class="stat"><div class="stat-value">${sharedFull.totalTransactions}</div><div class="stat-label">ShardedAMM: txs in traced block(s)</div></div>
+      <div class="stat"><div class="stat-value">${sharded.conflictingTransactionPairs}</div><div class="stat-label">ShardedAMM: conflicting tx pairs (own storage)</div></div>
+    </div>
 
-  renderBar(el, "NaiveAMM", naive.conflictingSlots, max, "hot");
-  renderBar(el, `ShardedAMM (${report.shardedAMM.bandCount} bands)`, sharded.conflictingSlots, max, "safe");
+    <div class="bar-row">
+      <div class="bar-row-label">NaiveAMM (own storage)</div>
+      <div class="bar-track"><div class="bar-fill hot" style="width:${Math.max((naive.conflictingSlots / max) * 100, naive.conflictingSlots > 0 ? 3 : 0)}%"></div></div>
+      <div class="bar-num">${naive.conflictingSlots} slot${naive.conflictingSlots === 1 ? "" : "s"}</div>
+    </div>
+    <div class="bar-row">
+      <div class="bar-row-label">ShardedAMM (${report.shardedAMM.bandCount} bands, own storage)</div>
+      <div class="bar-track"><div class="bar-fill good" style="width:${Math.max((sharded.conflictingSlots / max) * 100, sharded.conflictingSlots > 0 ? 3 : 0)}%"></div></div>
+      <div class="bar-num">${sharded.conflictingSlots} slot${sharded.conflictingSlots === 1 ? "" : "s"}</div>
+    </div>
 
-  const note = document.createElement("div");
-  note.className = "dynamic-note";
-  note.innerHTML = `Conflict count = (contract address, storage slot) pairs written by more than one transaction in the block, scoped to each AMM's own storage (matches what the static analyzer evaluates). The full cross-contract trace also shows every swap touching the ERC20 token contracts' own <code>balanceOf(AMM)</code> slot — that's inherent to ERC20 accounting, not something either AMM's own storage layout can fix.`;
-  el.appendChild(note);
+    <p class="lead" style="margin-top:16px;">
+      Block(s) traced — NaiveAMM: <span class="mono">${(report.naiveAMM.blockNumbers || []).join(", ")}</span>.
+      ShardedAMM: <span class="mono">${(report.shardedAMM.blockNumbers || []).join(", ")}</span>.
+      Generated ${report.generatedAt}.
+    </p>
+
+    <div class="flag-group-label">NaiveAMM — AMM-scoped vs. full cross-contract trace</div>
+    ${renderSlotTable(naive.slotWriterCounts)}
+    <p class="lead">Full trace (incl. ERC20 token contracts): ${naiveFull.conflictingSlots} conflicting slots, ${naiveFull.conflictingTransactionPairs} pairs.</p>
+    ${renderSlotTable(naiveFull.slotWriterCounts)}
+
+    <div class="flag-group-label">ShardedAMM — AMM-scoped vs. full cross-contract trace</div>
+    ${renderSlotTable(sharded.slotWriterCounts)}
+    <p class="lead">Full trace (incl. ERC20 token contracts): ${sharedFull.conflictingSlots} conflicting slots, ${sharedFull.conflictingTransactionPairs} pairs.</p>
+    ${renderSlotTable(sharedFull.slotWriterCounts)}
+  `;
 }
 
-function renderFooter(deployment) {
-  const el = document.getElementById("footer");
-  if (!deployment) {
-    el.innerHTML = `<p>Deployment info not yet generated.</p>`;
-    return;
-  }
+function renderAddresses(deployment) {
+  const el = document.getElementById("addr-list");
+  if (!deployment) { el.innerHTML = `<p class="lead" style="margin-top:0;">Deployment info not yet generated.</p>`; return; }
+  const chip = (label, info) => `
+    <a class="addr-chip" href="${info.monadscanUrl}" target="_blank" rel="noopener">
+      <span class="tag">${label}</span>${info.address}
+    </a>`;
   el.innerHTML = `
-    <p>
-      NaiveAMM: <a href="${deployment.naiveAMM.monadscanUrl}" target="_blank" rel="noopener">${deployment.naiveAMM.address}</a><br>
-      ShardedAMM: <a href="${deployment.shardedAMM.monadscanUrl}" target="_blank" rel="noopener">${deployment.shardedAMM.address}</a>
-    </p>
-    <p><strong>Known limitations</strong></p>
-    <ul>
-      <li>The static pass detects known hot-slot patterns via Slither's read/write extraction; contracts with heavy inline assembly or delegatecall-based storage indirection are flagged "not fully analyzable" rather than silently passed as safe.</li>
-      <li>Dynamic conflict counts are real, measured data from prestateTracer diffs - not inferred from latency - but reflect the specific load pattern tested, not a general prediction for arbitrary future usage.</li>
-      <li>ShardedAMM's price-banding is a simplified, parameterized illustrative fix, not production-grade concentrated-liquidity math.</li>
-      <li>Every swap still writes the paired ERC20 tokens' own balanceOf(AMM) slot regardless of band - band-sharding removes conflicts on the AMM's own reserve accounting, not on the token contracts it calls into.</li>
-    </ul>
-    <p>
-      <a href="https://github.com/kodykebab/venus" target="_blank" rel="noopener" id="repo-link">Source on GitHub</a>
-      · <a href="./">Back to overview</a>
-      · <a href="./upload.html">Analyze your own contract</a>
-    </p>
-  `;
+    <div class="grid-2" style="margin-top:16px;">
+      ${chip("NaiveAMM", deployment.naiveAMM)}
+      ${chip("ShardedAMM", deployment.shardedAMM)}
+      ${chip("token0", deployment.token0)}
+      ${chip("token1", deployment.token1)}
+    </div>`;
 }
 
 async function fireLiveTx() {
@@ -334,7 +397,16 @@ async function fireLiveTx() {
   }
 }
 
+const LIMITATIONS = [
+  "The static pass detects known hot-slot patterns via Slither's read/write extraction; contracts with heavy inline assembly or delegatecall-based storage indirection are flagged \"not fully analyzable\" rather than silently passed as safe.",
+  "Dynamic conflict counts are real, measured data from prestateTracer diffs - not inferred from latency - but reflect the specific load pattern tested, not a general prediction for arbitrary future usage.",
+  "ShardedAMM's price-banding is a simplified, parameterized illustrative fix, not production-grade concentrated-liquidity math.",
+  "Every swap still writes the paired ERC20 tokens' own balanceOf(AMM) slot regardless of band - band-sharding removes conflicts on the AMM's own reserve accounting, not on the token contracts it calls into.",
+];
+
 async function init() {
+  document.getElementById("limitations-list").innerHTML = LIMITATIONS.map(l => `<li>${l}</li>`).join("");
+
   try {
     const [naiveStatic, shardedStatic] = await Promise.all([
       loadJson("reports/static-naiveamm.json"),
@@ -355,9 +427,9 @@ async function init() {
   }
 
   try {
-    renderFooter(await loadJson("reports/deployment.json"));
+    renderAddresses(await loadJson("reports/deployment.json"));
   } catch (err) {
-    renderFooter(null);
+    renderAddresses(null);
   }
 
   document.getElementById("livetx-button").addEventListener("click", fireLiveTx);

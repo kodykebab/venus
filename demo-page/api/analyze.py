@@ -17,6 +17,14 @@ import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler
 
+# crytic_compile transitively imports solc_select, which unconditionally tries to
+# mkdir ~/.solc-select/artifacts at *import time* - even though we never call any of
+# its download/install functions (we always pass an explicit solc= binary path).
+# Vercel sets $HOME to a read-only sandbox path, so that import crashes the whole
+# function before our own code ever runs. Force HOME to /tmp (writable) before that
+# import chain fires - setdefault() isn't enough since Vercel already sets HOME.
+os.environ["HOME"] = "/tmp"
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "_analyzer"))
 
 from classify import classify  # noqa: E402
