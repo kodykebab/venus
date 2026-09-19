@@ -1,0 +1,23 @@
+{
+  "contract": "ShardedAMM",
+  "parallelismScore": 50,
+  "flags": [
+    {
+      "slot": "reserve0ByBand",
+      "touchedBy": [
+        "addLiquidity"
+      ],
+      "severity": "hot",
+      "suggestedFix": "'reserve0ByBand' is indexed by a shared/fixed key in addLiquidity - shard it by caller or another per-transaction key so concurrent calls resolve to different slots."
+    },
+    {
+      "slot": "reserve1ByBand",
+      "touchedBy": [
+        "addLiquidity"
+      ],
+      "severity": "hot",
+      "suggestedFix": "'reserve1ByBand' is indexed by a shared/fixed key in addLiquidity - shard it by caller or another per-transaction key so concurrent calls resolve to different slots."
+    }
+  ],
+  "unanalyzable": false
+}

@@ -1,0 +1,25 @@
+{
+  "contract": "NaiveAMM",
+  "parallelismScore": 0,
+  "flags": [
+    {
+      "slot": "reserve0",
+      "touchedBy": [
+        "addLiquidity",
+        "swap"
+      ],
+      "severity": "hot",
+      "suggestedFix": "'reserve0' is a single global slot written/read by addLiquidity, swap - shard it (e.g. by price band, by caller) so concurrent calls touch different slots."
+    },
+    {
+      "slot": "reserve1",
+      "touchedBy": [
+        "addLiquidity",
+        "swap"
+      ],
+      "severity": "hot",
+      "suggestedFix": "'reserve1' is a single global slot written/read by addLiquidity, swap - shard it (e.g. by price band, by caller) so concurrent calls touch different slots."
+    }
+  ],
+  "unanalyzable": false
+}

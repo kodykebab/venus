@@ -1,0 +1,15 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+network = "monad"
+bytecode_hash = "none"
+use_literal_content = true
+
+[rpc_endpoints]
+monad_testnet = "${RPC_URL}"
+
+[etherscan]
+monad_testnet = { key = "${MONADSCAN_API_KEY}", chain = 10143, url = "https://api.etherscan.io/v2/api?chainid=10143" }
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

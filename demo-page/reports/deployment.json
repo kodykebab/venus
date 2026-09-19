@@ -1,0 +1,19 @@
+{
+  "chainId": 10143,
+  "naiveAMM": {
+    "address": "0x65a0c262a20a34568242abd95894c79e28cc5fb8",
+    "monadscanUrl": "https://testnet.monadscan.com/address/0x65a0c262a20a34568242abd95894c79e28cc5fb8"
+  },
+  "shardedAMM": {
+    "address": "0x3e3b4e31931f341f10e0f102ff885357ac5d3834",
+    "monadscanUrl": "https://testnet.monadscan.com/address/0x3e3b4e31931f341f10e0f102ff885357ac5d3834"
+  },
+  "token0": {
+    "address": "0x6cac62d51748d7387c0fe6ce27bea1b609e60362",
+    "monadscanUrl": "https://testnet.monadscan.com/address/0x6cac62d51748d7387c0fe6ce27bea1b609e60362"
+  },
+  "token1": {
+    "address": "0x2d7815f4882a27e9e4eb39262a266fc11589c79e",
+    "monadscanUrl": "https://testnet.monadscan.com/address/0x2d7815f4882a27e9e4eb39262a266fc11589c79e"
+  }
+}
