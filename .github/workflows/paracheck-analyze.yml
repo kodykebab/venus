@@ -1,0 +1,27 @@
+name: ParaCheck Analyze (sample contract)
+
+# Dogfoods .github/actions/analyze against contracts/samples/StakingPoolSample.sol on every
+# PR that touches it - also serves as the reference example for using this action in any
+# other repo (see README.md's "GitHub Action" section).
+
+on:
+  pull_request:
+    paths:
+      - "contracts/samples/StakingPoolSample.sol"
+      - ".github/actions/analyze/**"
+      - ".github/workflows/paracheck-analyze.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/analyze
+        with:
+          contract-path: contracts/samples/StakingPoolSample.sol
+          fail-below-score: "" # report-only for this example; set e.g. "50" to block low-score PRs

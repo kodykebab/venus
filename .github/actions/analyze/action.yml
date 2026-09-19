@@ -1,0 +1,69 @@
+name: "ParaCheck Analyze"
+description: >-
+  Runs ParaCheck's static parallelism-conflict classifier against a single, self-contained
+  Solidity file (no imports) and posts a summary comment on the pull request.
+author: "kodykebab"
+
+inputs:
+  contract-path:
+    description: "Path to a single, self-contained Solidity file (no imports) to analyze."
+    required: true
+  fail-below-score:
+    description: >-
+      Fail the job if any analyzed contract's parallelism score is below this threshold
+      (0-100). Leave empty to never fail - report only.
+    required: false
+    default: ""
+  comment-on-pr:
+    description: "Post a summary comment on the pull request (only applies in a pull_request run)."
+    required: false
+    default: "true"
+  github-token:
+    description: "Token used to post the PR comment. Defaults to the workflow's own GITHUB_TOKEN."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  report-json:
+    description: "The raw JSON report ({unanalyzable, contracts: [...]})."
+    value: ${{ steps.analyze.outputs.report }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install analyzer dependencies
+      shell: bash
+      run: pip install -q -r "${{ github.action_path }}/../../../analyzer/static/requirements.txt"
+
+    - name: Run static analysis
+      id: analyze
+      shell: bash
+      run: |
+        set -euo pipefail
+        SOLC_BIN="${{ github.action_path }}/../../../demo-page/api/_analyzer/solc-linux-amd64"
+        chmod +x "$SOLC_BIN"
+        REPORT=$(python3 "${{ github.action_path }}/../../../analyzer/static/analyze_file.py" \
+          "${{ inputs.contract-path }}" --solc "$SOLC_BIN")
+        echo "$REPORT"
+        {
+          echo "report<<PARACHECK_REPORT_EOF"
+          echo "$REPORT"
+          echo "PARACHECK_REPORT_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Evaluate result and comment on PR
+      shell: bash
+      run: python3 "${{ github.action_path }}/post_comment.py"
+      env:
+        REPORT_JSON: ${{ steps.analyze.outputs.report }}
+        FAIL_BELOW_SCORE: ${{ inputs.fail-below-score }}
+        COMMENT_ON_PR: ${{ inputs.comment-on-pr }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        CONTRACT_PATH: ${{ inputs.contract-path }}

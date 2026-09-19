@@ -81,6 +81,53 @@ exactly what got resolved. Secrets never go in either file: `loadtest`/`livetx` 
 your shell environment, same as always. Global flags (`--config`, `--venv`,
 `--foundry-bin`) override the config file and must come before the command.
 
+## GitHub Action
+
+[`.github/actions/analyze`](.github/actions/analyze) wraps the same static classifier as a
+reusable composite Action - point it at one self-contained Solidity file (no `import`s,
+same constraint as `paracheck <file>.sol`) and it posts a summary comment on the PR, with
+an optional score threshold to fail the job outright. No server, no GitHub App, no OAuth -
+just the repo's own built-in `GITHUB_TOKEN`.
+
+```yaml
+# .github/workflows/paracheck.yml
+on:
+  pull_request:
+    paths: ["src/MyContract.sol"]
+
+permissions:
+  contents: read
+  pull-requests: write   # required for the PR comment
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: kodykebab/venus/.github/actions/analyze@main
+        with:
+          contract-path: src/MyContract.sol
+          fail-below-score: "50"   # optional - omit to report-only, never fail the job
+```
+
+| Input | Required | Default | Meaning |
+|---|---|---|---|
+| `contract-path` | yes | - | Path to a single, self-contained `.sol` file |
+| `fail-below-score` | no | `""` (never fails) | Fail the job if the lowest parallelism score is below this |
+| `comment-on-pr` | no | `"true"` | Post the summary as a PR comment |
+| `github-token` | no | `${{ github.token }}` | Only needed if the default token can't comment (e.g. some fork PR setups) |
+
+Output: `report-json` (the raw JSON, same shape as everywhere else on this project).
+
+[`.github/workflows/paracheck-analyze.yml`](.github/workflows/paracheck-analyze.yml) in
+this repo is both the reference example and a live self-test - it runs the action against
+[`contracts/samples/StakingPoolSample.sol`](contracts/samples/StakingPoolSample.sol) on
+every PR that touches it.
+
+**Known limitation**, same as the CLI and the web upload page: single self-contained file
+only, no `import` resolution - a contract that imports other files comes back
+`unanalyzable` with a clear reason, not a crash or a wrong answer.
+
 ## Running it yourself
 
 ### Prerequisites
