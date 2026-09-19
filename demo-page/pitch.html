@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ParaCheck — The Business Case</title>
+<meta name="description" content="The business case and live on-chain proof for ParaCheck, a parallelism-conflict analyzer for Monad smart contracts." />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --ink: #14130f;
+    --ink-muted: #5c584e;
+    --rule: #ddd9cf;
+    --accent: #d6300b;
+    --accent-ink: #ffffff;
+    --good: #0b8f6e;
+    --chip-bg: #f1efe8;
+    --shadow: 0 1px 2px rgba(20,19,15,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141412;
+      --surface: #1b1a17;
+      --ink: #f4f2ec;
+      --ink-muted: #a49f92;
+      --rule: #34322c;
+      --accent: #e85a38;
+      --accent-ink: #14130f;
+      --good: #22a67f;
+      --chip-bg: #232019;
+      --shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141412;
+    --surface: #1b1a17;
+    --ink: #f4f2ec;
+    --ink-muted: #a49f92;
+    --rule: #34322c;
+    --accent: #e85a38;
+    --accent-ink: #14130f;
+    --good: #22a67f;
+    --chip-bg: #232019;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, sans-serif;
+    padding: 0 20px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  h1, h2, h3, .display {
+    font-family: "Archivo", -apple-system, sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  a { color: inherit; }
+
+  /* ---- top bar ---- */
+  .topbar {
+    position: sticky; top: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 0; background: var(--bg);
+    border-bottom: 1px solid var(--rule);
+    z-index: 10;
+  }
+  .wordmark { font-family: "Archivo"; font-weight: 900; font-size: 17px; letter-spacing: -0.01em; }
+  .wordmark span { color: var(--accent); }
+  .topnav { display: flex; gap: 26px; font-size: 13px; font-weight: 600; }
+  .topnav a { text-decoration: none; color: var(--ink-muted); }
+  .topnav a:hover { color: var(--ink); }
+  @media (max-width: 640px) { .topnav { display: none; } }
+
+  /* ---- hero ---- */
+  .hero { padding: 64px 0 40px; }
+  .eyebrow {
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--accent); margin-bottom: 18px;
+  }
+  .hero h1 { font-size: clamp(34px, 6vw, 64px); line-height: 1.03; }
+  .hero-sub {
+    font-size: 17px; color: var(--ink-muted); max-width: 640px; margin-top: 22px; line-height: 1.55;
+  }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 30px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 22px; font-size: 14px; font-weight: 700;
+    text-decoration: none; border-radius: 3px; border: 1px solid var(--ink);
+  }
+  .btn-primary { background: var(--ink); color: var(--bg); }
+  .btn-secondary { color: var(--ink); border-color: var(--rule); }
+  .btn-secondary:hover { border-color: var(--ink); }
+
+  /* ---- proof strip (hero) ---- */
+  .proof-strip {
+    margin-top: 46px; display: grid; grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--rule); border-radius: 4px; overflow: hidden;
+  }
+  .proof-cell { padding: 26px 26px; background: var(--surface); }
+  .proof-cell + .proof-cell { border-left: 1px solid var(--rule); }
+  @media (max-width: 640px) {
+    .proof-strip { grid-template-columns: 1fr; }
+    .proof-cell + .proof-cell { border-left: none; border-top: 1px solid var(--rule); }
+  }
+  .proof-name { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); }
+  .proof-score { font-family: "Archivo"; font-weight: 900; font-size: 52px; line-height: 1; margin-top: 8px; }
+  .proof-score small { font-family: "IBM Plex Sans"; font-weight: 600; font-size: 15px; color: var(--ink-muted); }
+  .proof-detail { font-size: 13px; color: var(--ink-muted); margin-top: 8px; line-height: 1.5; }
+
+  /* ---- sections ---- */
+  section { padding: 58px 0; border-top: 1px solid var(--rule); }
+  .row { display: grid; grid-template-columns: 180px 1fr; gap: 36px; }
+  @media (max-width: 720px) { .row { grid-template-columns: 1fr; gap: 16px; } }
+  .num-col { display: flex; flex-direction: column; gap: 6px; }
+  .num { font-family: "Archivo"; font-weight: 900; font-size: 15px; color: var(--accent); }
+  .sec-eyebrow {
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--ink-muted); line-height: 1.4; max-width: 150px;
+  }
+  section h2 { font-size: clamp(24px, 3.4vw, 34px); line-height: 1.1; max-width: 680px; }
+  .body-text { font-size: 15.5px; line-height: 1.7; color: var(--ink); max-width: 640px; margin-top: 18px; }
+  .body-text + .body-text { margin-top: 14px; }
+  .body-text b { font-weight: 700; }
+  .source-note { font-size: 12.5px; color: var(--ink-muted); margin-top: 16px; }
+
+  /* stat grid */
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--rule); border: 1px solid var(--rule); margin-top: 28px; border-radius: 4px; overflow: hidden;
+  }
+  @media (max-width: 720px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--surface); padding: 20px 18px; }
+  .stat-value { font-family: "Archivo"; font-weight: 800; font-size: 27px; line-height: 1.05; }
+  .stat-label { font-size: 12px; color: var(--ink-muted); margin-top: 6px; line-height: 1.4; }
+
+  /* pull quote */
+  .pull {
+    font-family: "Archivo"; font-weight: 800; font-size: clamp(20px, 2.6vw, 27px);
+    line-height: 1.28; max-width: 660px; margin-top: 22px; color: var(--ink);
+    border-left: 3px solid var(--accent); padding-left: 20px;
+  }
+
+  /* proof section detail */
+  .flag-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 16px 18px; margin-top: 10px; }
+  .flag-title { font-family: "IBM Plex Mono"; font-size: 13px; font-weight: 500; }
+  .flag-title .hot { color: var(--accent); }
+  .flag-title .good { color: var(--good); }
+  .flag-sub { font-size: 12.5px; color: var(--ink-muted); margin-top: 4px; }
+  .score-line { display: flex; align-items: baseline; gap: 10px; margin-top: 4px; }
+  .score-num { font-family: "Archivo"; font-weight: 900; font-size: 40px; }
+
+  .bar-block { margin-top: 22px; }
+  .bar-row { display: grid; grid-template-columns: 130px 1fr 90px; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .bar-row-label { font-size: 13px; font-weight: 600; }
+  .bar-track { height: 20px; background: var(--chip-bg); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; }
+  .bar-fill.hot { background: var(--accent); }
+  .bar-fill.good { background: var(--good); }
+  .bar-num { font-family: "IBM Plex Mono"; font-size: 13px; text-align: right; }
+
+  .addr-chip {
+    display: inline-flex; align-items: center; gap: 8px; font-family: "IBM Plex Mono";
+    font-size: 12.5px; background: var(--chip-bg); border-radius: 3px; padding: 7px 11px;
+    text-decoration: none; color: var(--ink); margin-top: 8px; margin-right: 8px;
+  }
+  .addr-chip .tag { color: var(--ink-muted); }
+  .addr-chip:hover { background: var(--rule); }
+
+  .verified-badge {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700;
+    color: var(--good); text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .verified-badge::before { content: "●"; font-size: 8px; }
+
+  /* footer */
+  footer { padding: 60px 0 80px; border-top: 1px solid var(--rule); }
+  .footer-head { font-size: clamp(24px, 4vw, 38px); max-width: 560px; }
+  .footer-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 28px; }
+  .footer-meta { margin-top: 46px; font-size: 12.5px; color: var(--ink-muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="wordmark">PARA<span>CHECK</span></div>
+    <nav class="topnav">
+      <a href="#proof">Proof</a>
+      <a href="#case">The case</a>
+      <a href="#now">Why now</a>
+      <a href="#code">Code</a>
+    </nav>
+  </div>
+
+  <section class="hero" style="border-top:none; padding-top:56px;">
+    <div class="eyebrow">Parallelism-conflict analysis for Monad</div>
+    <h1>Monad promises parallel<br>execution. Most contracts<br>never claim it.</h1>
+    <p class="hero-sub">
+      Optimistic parallel execution is Monad's core bet: transactions run in parallel, and
+      anything that collides gets re-executed. A contract with naive storage — one global
+      reserve pair, one shared counter — forces every transaction through that collision path,
+      quietly turning "parallel" into "sequential, with overhead." Nobody tells Solidity
+      developers this is happening. ParaCheck does — statically, and with real measured
+      on-chain data.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/kodykebab/venus" target="_blank" rel="noopener">View the code →</a>
+      <a class="btn btn-secondary" href="https://testnet.monadscan.com/address/0x65a0C262a20a34568242ABD95894C79E28CC5Fb8" target="_blank" rel="noopener">Read the verified contracts</a>
+      <a class="btn btn-secondary" href="./index.html">Live demo →</a>
+    </div>
+
+    <div class="proof-strip">
+      <div class="proof-cell">
+        <div class="proof-name">NaiveAMM — single global reserve</div>
+        <div class="proof-score">0<small>/100 parallelism score</small></div>
+        <div class="proof-detail">reserve0 and reserve1 both flagged hot — every swap collides with every other swap.</div>
+      </div>
+      <div class="proof-cell">
+        <div class="proof-name">ShardedAMM — band-sharded reserve</div>
+        <div class="proof-score">50<small>/100 parallelism score</small></div>
+        <div class="proof-detail">swap() clean — no hot slots. Only addLiquidity's whole-band sweep still is.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="proof">
+    <div class="row">
+      <div class="num-col">
+        <div class="num">Proof</div>
+        <div class="sec-eyebrow">Not a mockup. Deployed, verified, measured live.</div>
+      </div>
+      <div>
+        <h2>The exact cost category this pitch describes, already caught, on real Monad Testnet transactions.</h2>
+
+        <p class="body-text">
+          Both contracts below are deployed and source-verified on Monad Testnet (chain
+          <span class="mono">10143</span>). The numbers underneath aren't projected — they're
+          read directly off <span class="mono">debug_traceBlockByNumber</span> /
+          <span class="mono">prestateTracer</span> diffs from transactions ParaCheck fired
+          itself.
+        </p>
+
+        <div class="flag-card">
+          <div class="flag-title"><span class="hot">NaiveAMM</span> — reserve0, reserve1</div>
+          <div class="flag-sub">Touched by addLiquidity and swap. A single global slot pair — shard it (by price band, by caller) so concurrent calls touch different slots.</div>
+        </div>
+        <div class="flag-card">
+          <div class="flag-title"><span class="good">ShardedAMM</span> — swap() is safe</div>
+          <div class="flag-sub">Band index is derived from a function parameter, not a shared key. Only reserve0ByBand / reserve1ByBand under addLiquidity's all-band sweep remain flagged.</div>
+        </div>
+
+        <div class="bar-block">
+          <div class="bar-row">
+            <div class="bar-row-label">NaiveAMM</div>
+            <div class="bar-track"><div class="bar-fill hot" style="width:100%"></div></div>
+            <div class="bar-num">2 slots</div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-row-label">ShardedAMM</div>
+            <div class="bar-track"><div class="bar-fill good" style="width:2%"></div></div>
+            <div class="bar-num">0 slots</div>
+          </div>
+        </div>
+        <p class="source-note">
+          5 concurrent NaiveAMM swaps, same real block: 2 conflicting storage slots, all 5
+          transactions mutually colliding (20 conflicting pairs). 3 concurrent ShardedAMM swaps
+          — one per band, same real block: zero. Measured, not simulated.
+        </p>
+
+        <div style="margin-top:20px;">
+          <span class="verified-badge">Verified on Monadscan</span>
+          <div style="margin-top:8px;">
+            <a class="addr-chip" href="https://testnet.monadscan.com/address/0x65a0C262a20a34568242ABD95894C79E28CC5Fb8" target="_blank" rel="noopener">
+              <span class="tag">NaiveAMM</span> 0x65a0…5Fb8
+            </a>
+            <a class="addr-chip" href="https://testnet.monadscan.com/address/0x3e3b4e31931f341F10E0f102ff885357Ac5D3834" target="_blank" rel="noopener">
+              <span class="tag">ShardedAMM</span> 0x3e3b…3834
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="case">
+    <div class="row">
+      <div class="num-col">
+        <div class="num">01</div>
+        <div class="sec-eyebrow">The wave you're catching</div>
+      </div>
+      <div>
+        <h2>Real capital and real transaction volume, committing to a brand-new execution model right now.</h2>
+        <p class="body-text">
+          Monad's own published numbers, not projections — in barely seven months since its
+          November 24, 2025 mainnet launch.
+        </p>
+        <div class="stat-grid">
+          <div class="stat"><div class="stat-value">3.9M+</div><div class="stat-label">wallets on Monad Mainnet</div></div>
+          <div class="stat"><div class="stat-value">450M+</div><div class="stat-label">transactions processed</div></div>
+          <div class="stat"><div class="stat-value">~$1B</div><div class="stat-label">TVL, up from $355M in April 2026</div></div>
+          <div class="stat"><div class="stat-value">$17.8B+</div><div class="stat-label">cumulative DEX volume</div></div>
+          <div class="stat"><div class="stat-value">140+</div><div class="stat-label">apps live on Mainnet</div></div>
+          <div class="stat"><div class="stat-value">1,700</div><div class="stat-label">unique devs, Blitz hackathon series alone</div></div>
+          <div class="stat"><div class="stat-value">282</div><div class="stat-label">projects deployed from Blitz</div></div>
+          <div class="stat"><div class="stat-value">742</div><div class="stat-label">projects across all 2026 Monad hackathons</div></div>
+        </div>
+        <p class="source-note">Figures as of the June 30, 2026 snapshot published by Monad.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="num-col">
+        <div class="num">02</div>
+        <div class="sec-eyebrow">The inefficiency problem is already proven</div>
+      </div>
+      <div>
+        <h2>This isn't ParaCheck's claim. It's the repeated finding of peer-reviewed research.</h2>
+        <p class="body-text">
+          A large-scale empirical study of <b>more than 160,000 real deployed smart
+          contracts</b> found <b>52.75% contain at least one gas-inefficient pattern</b>
+          (Journal of Computer Science and Technology). A separate study of 143 real-world
+          Ethereum contracts found <b>56% included gas-wasteful patterns</b>, with optimized
+          versions cutting deployment cost by an average of over 13%, up to 64% in the best
+          case (International Journal of Grid and Distributed Computing).
+        </p>
+        <p class="pull">
+          One academic case study applying an optimization pass across a real dataset of
+          contract executions cut total gas usage by 55.4% — a documented $109.9 million in
+          real-world savings, from that dataset alone.
+        </p>
+        <p class="body-text">
+          The pattern holds across all of it: <b>more than half of deployed contracts carry
+          avoidable inefficiency</b>, and when tooling exists to catch it, the savings are
+          large and provable — not theoretical.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="num-col">
+        <div class="num">03</div>
+        <div class="sec-eyebrow">Monad punishes it harder</div>
+      </div>
+      <div>
+        <h2>The same sloppy contract costs nothing on Ethereum and something real on Monad.</h2>
+        <p class="body-text">
+          On Ethereum, fees are charged on gas <i>used</i> — overestimating your gas limit
+          costs nothing. Category Labs' own engineering blog states plainly that <b>on Monad,
+          fees are charged on the declared gas limit, not actual consumption</b> — a
+          deliberate choice to block denial-of-service and discourage optimistic-MEV
+          extraction.
+        </p>
+        <p class="pull">
+          Monad's own team cites real Ethereum transactions declaring a 5,000,000 gas limit
+          for a transfer that used 21,000 — over 200x. "Effectively harmless" there. On Monad,
+          that exact sloppiness has a direct price tag, every single time.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="num-col">
+        <div class="num">04</div>
+        <div class="sec-eyebrow">The gap nobody's covering</div>
+      </div>
+      <div>
+        <h2>Parallel-execution conflict cost is a new category, layered on top, and it's currently invisible.</h2>
+        <p class="body-text">
+          Everything above is the general gas-waste problem — already large. Monad adds an
+          entirely new one: naive storage layout forcing otherwise-parallel transactions into
+          serial re-execution, quietly eating the exact throughput advantage the chain is
+          built to deliver.
+        </p>
+        <p class="body-text">
+          <b>No independent, third-party benchmark of what this specific pattern costs Monad
+          users has been published anywhere, as of this writing.</b> That's not a weak point
+          in the argument — it's the opening. ParaCheck is built to be the first tool that
+          makes this cost visible and measurable, the way Slither and Mythril did for general
+          gas waste on Ethereum, years before running a linter before deployment became
+          standard practice.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="num-col">
+        <div class="num">05</div>
+        <div class="sec-eyebrow">What's realistically on the table</div>
+      </div>
+      <div>
+        <h2>An illustrative model, deliberately labeled as one — not an invented number.</h2>
+        <p class="body-text">
+          Apply the same order-of-magnitude prevalence rate that peer-reviewed research
+          repeatedly found on Ethereum — roughly half of contracts carrying at least one
+          avoidable inefficiency — to Monad's own cited activity: <b>$17.8B+ in cumulative
+          DEX volume, $1B+ in TVL</b>, under a fee mechanism that punishes inefficiency more
+          directly than Ethereum's does. A meaningful share of the value moving through Monad
+          today is plausibly sitting on avoidable inefficiency.
+        </p>
+        <p class="body-text">
+          This is presented explicitly as an extrapolation from published, cited prevalence
+          data applied to Monad's own published activity — not an audited, Monad-specific
+          dollar figure, because that number doesn't exist yet for the parallel-conflict
+          category specifically. <b>That absence is precisely the gap this tool exists to
+          close.</b>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="now">
+    <div class="row">
+      <div class="num-col">
+        <div class="num">06</div>
+        <div class="sec-eyebrow">Why now</div>
+      </div>
+      <div>
+        <h2>A rare window that closes the longer it stays open.</h2>
+        <p class="body-text">
+          The chain is scaling fast enough that the cost of <i>not</i> fixing this compounds
+          weekly — more TVL and more volume locks in around contracts written before this
+          class of problem was understood. The developer base is large, concentrated, and
+          reachable <i>right now</i>, through Monad's own hackathon and grant programs — a
+          rare window where reaching a meaningful share of an entire chain's active builders
+          is genuinely possible, not a multi-year sales motion.
+        </p>
+        <p class="body-text">
+          General gas-waste tooling is mature — Slither, Mythril, academic tools like
+          PeCatch. <b>The parallel-execution-conflict category, specific to Monad and the
+          small number of chains sharing its execution model, has zero published tooling as
+          of this writing.</b> First-mover position in a category under two years old, on a
+          chain growing this fast, is a genuinely rare combination.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <footer id="code">
+    <h2 class="footer-head">Read the source. Read the trace data. Run it yourself.</h2>
+    <div class="footer-links">
+      <a class="btn btn-primary" href="https://github.com/kodykebab/venus" target="_blank" rel="noopener">github.com/kodykebab/venus →</a>
+      <a class="btn btn-secondary" href="https://testnet.monadscan.com/address/0x65a0C262a20a34568242ABD95894C79E28CC5Fb8" target="_blank" rel="noopener">NaiveAMM on Monadscan</a>
+      <a class="btn btn-secondary" href="https://testnet.monadscan.com/address/0x3e3b4e31931f341F10E0f102ff885357Ac5D3834" target="_blank" rel="noopener">ShardedAMM on Monadscan</a>
+    </div>
+    <div class="footer-meta">
+      <span>ParaCheck — static + dynamic parallelism-conflict analysis for Monad smart contracts</span>
+      <span>Monad Testnet · chain 10143</span>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

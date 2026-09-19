@@ -297,7 +297,10 @@ function renderFooter(deployment) {
       <li>ShardedAMM's price-banding is a simplified, parameterized illustrative fix, not production-grade concentrated-liquidity math.</li>
       <li>Every swap still writes the paired ERC20 tokens' own balanceOf(AMM) slot regardless of band - band-sharding removes conflicts on the AMM's own reserve accounting, not on the token contracts it calls into.</li>
     </ul>
-    <p><a href="https://github.com" target="_blank" rel="noopener" id="repo-link">Source on GitHub</a></p>
+    <p>
+      <a href="https://github.com/kodykebab/venus" target="_blank" rel="noopener" id="repo-link">Source on GitHub</a>
+      · <a href="./pitch.html">Why this matters</a>
+    </p>
   `;
 }
 
