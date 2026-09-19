@@ -29,21 +29,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const { RPC_URL, CHAIN_ID, LIVETX_PRIVATE_KEY, NAIVE_AMM_ADDRESS, SHARDED_AMM_ADDRESS, TOKEN0_ADDRESS } = process.env;
-  if (!RPC_URL || !LIVETX_PRIVATE_KEY || !NAIVE_AMM_ADDRESS || !SHARDED_AMM_ADDRESS || !TOKEN0_ADDRESS) {
-    res.status(500).json({ error: "Server misconfigured: missing RPC_URL/LIVETX_PRIVATE_KEY/contract address env vars" });
+  const required = { RPC_URL, LIVETX_PRIVATE_KEY, NAIVE_AMM_ADDRESS, SHARDED_AMM_ADDRESS, TOKEN0_ADDRESS };
+  const missing = Object.entries(required)
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+  if (missing.length > 0) {
+    // Names only, never values - safe to expose for debugging a deploy misconfiguration.
+    res.status(500).json({ error: `Server misconfigured: missing env var(s): ${missing.join(", ")}` });
     return;
   }
 
   try {
     const chainId = Number(CHAIN_ID ?? 10143);
     const body = (typeof req.body === "string" ? JSON.parse(req.body) : req.body) ?? {};
-    const ammAddress = body.contract === "sharded" ? SHARDED_AMM_ADDRESS : NAIVE_AMM_ADDRESS;
+    const ammAddress = body.contract === "sharded" ? required.SHARDED_AMM_ADDRESS! : required.NAIVE_AMM_ADDRESS!;
     const amount = parseUnits(String(body.amount ?? "10"), 18);
 
-    const provider = new JsonRpcProvider(RPC_URL);
-    const wallet = new Wallet(LIVETX_PRIVATE_KEY, provider);
+    const provider = new JsonRpcProvider(required.RPC_URL);
+    const wallet = new Wallet(required.LIVETX_PRIVATE_KEY!, provider);
     const amm = new Contract(ammAddress, MIN_ABI, wallet);
-    const token0 = new Contract(TOKEN0_ADDRESS, MIN_ABI, wallet);
+    const token0 = new Contract(required.TOKEN0_ADDRESS!, MIN_ABI, wallet);
 
     let nonce = await provider.getTransactionCount(wallet.address, "latest");
 
@@ -57,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await (await token0.approve(ammAddress, amount, { nonce: nonce++ })).wait();
     }
 
-    const tx = await amm.swap(TOKEN0_ADDRESS, amount, 0, { nonce: nonce++, gasLimit: 500_000n });
+    const tx = await amm.swap(required.TOKEN0_ADDRESS!, amount, 0, { nonce: nonce++, gasLimit: 500_000n });
     const receipt = await tx.wait();
 
     res.status(200).json({
