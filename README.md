@@ -24,7 +24,7 @@ whose reserves are split across price bands, which conflicts far less).
 
 ## Live demo
 
-- Demo page: [static-ruby-psi.vercel.app](https://static-ruby-psi.vercel.app/)
+- Demo page: **_pending - not yet deployed (Vercel import pending)_**
 - `NaiveAMM`: [`0x65a0C262a20a34568242ABD95894C79E28CC5Fb8`](https://testnet.monadscan.com/address/0x65a0C262a20a34568242ABD95894C79E28CC5Fb8) (verified)
 - `ShardedAMM`: [`0x3e3b4e31931f341F10E0f102ff885357Ac5D3834`](https://testnet.monadscan.com/address/0x3e3b4e31931f341F10E0f102ff885357Ac5D3834) (verified, 3 bands)
 - Demo tokens: [`token0`](https://testnet.monadscan.com/address/0x6cAC62D51748d7387C0fE6ce27BEa1B609E60362) / [`token1`](https://testnet.monadscan.com/address/0x2d7815f4882a27E9e4Eb39262A266fC11589C79e) (verified)
@@ -138,51 +138,6 @@ an encrypted env var - never committed).
    slot), not something either AMM's storage layout can fix. The dynamic analyzer reports
    this scoped to the AMM's own storage (matching what the static analyzer evaluates) and
    separately as a full cross-contract trace, so both numbers are visible.
-
-## Glossary
-
-- **Anvil** - Foundry's local Ethereum-compatible test node. `anvil --network monad` runs
-  it with Monad's execution semantics, for testing without touching the real network.
-- **Band / band-sharding** - `ShardedAMM`'s reserves are split into a fixed number of
-  independent slot pairs ("bands"); which band a swap uses is decided by its size
-  (`bandOf(amountIn)`), so differently-sized swaps touch different storage and don't
-  conflict with each other.
-- **Chain ID** - the number identifying a specific network. `10143` is Monad Testnet;
-  `31337` is the default local Anvil chain; `143` is Monad Mainnet (not used here).
-- **CLI subshell `( ... )`** - wrapping a command in parentheses runs it in a subshell, so
-  a `cd` inside doesn't change your actual terminal's working directory once it finishes.
-  Used throughout this repo's copy-paste command blocks to avoid leaving your shell
-  somewhere unexpected.
-- **Conflict count / conflicting slots** - the number of `(contract address, storage slot)`
-  pairs written by more than one transaction inside the same block - the dynamic
-  analyzer's real, measured metric for parallelism conflicts.
-- **`debug_traceBlockByNumber` / `prestateTracer`** - the JSON-RPC call and tracer mode the
-  dynamic analyzer uses to get exact before/after storage-slot diffs for every transaction
-  in a block. Requires an RPC endpoint with `debug_*` methods enabled (most public
-  endpoints block or rate-limit these).
-- **Foundry (`forge` / `cast`)** - the Solidity toolchain this repo builds, tests, and
-  deploys contracts with. `forge` compiles/tests/deploys; `cast` is the general-purpose
-  chain-interaction CLI (balances, calls, wallet management).
-- **Keystore** - an encrypted, password-protected file holding a private key, created via
-  `cast wallet import`. Used for the deployer wallet instead of passing a raw private key
-  on the command line.
-- **Monadscan** - Monad's block explorer (`testnet.monadscan.com` for Testnet). Verifying a
-  contract there means its published source code is confirmed to match the deployed
-  bytecode, so anyone can read exactly what's running at that address.
-- **Parallelism score** - this repo's own static-analysis metric (0-100): the percentage of
-  a contract's state-changing external functions that touch no "hot" (conflict-prone)
-  storage slot. Not a standard/external metric - defined in `analyzer/static/classify.py`.
-- **QuickNode (dedicated endpoint)** - the RPC provider used here. A *dedicated* endpoint
-  is needed specifically because the dynamic analyzer depends on `debug_*` methods and
-  meaningful rate limits, which shared/free-tier public endpoints often don't provide.
-- **Slither** - the Solidity static-analysis framework (by Trail of Bits) the static
-  analyzer is built on top of, used here for its storage read/write extraction.
-- **Vercel / serverless function** - the hosting platform for the demo page. Chosen because
-  it can serve the static page *and* run a small server-side function
-  (`demo-page/api/livetx.ts`) from one deploy - the live-transaction button needs that
-  server-side piece to hold the demo wallet's private key and sign transactions, which a
-  plain static host (e.g. GitHub Pages) can't do.
-- **Verified contract** - see Monadscan, above.
 
 ## License
 
