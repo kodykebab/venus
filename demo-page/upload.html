@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ParaCheck — Analyze a Contract</title>
+<meta name="description" content="Upload or paste a Solidity contract and run it through ParaCheck's static parallelism-conflict classifier." />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --ink: #14130f;
+    --ink-muted: #5c584e;
+    --rule: #ddd9cf;
+    --accent: #d6300b;
+    --good: #0b8f6e;
+    --chip-bg: #f1efe8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141412; --surface: #1b1a17; --ink: #f4f2ec; --ink-muted: #a49f92;
+      --rule: #34322c; --accent: #e85a38; --good: #22a67f; --chip-bg: #232019;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141412; --surface: #1b1a17; --ink: #f4f2ec; --ink-muted: #a49f92;
+    --rule: #34322c; --accent: #e85a38; --good: #22a67f; --chip-bg: #232019;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, sans-serif;
+    padding: 0 20px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding-bottom: 80px; }
+  h1, h2, .display {
+    font-family: "Archivo", -apple-system, sans-serif; font-weight: 900;
+    letter-spacing: -0.02em; text-wrap: balance; margin: 0;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  a { color: var(--accent); }
+
+  .topbar {
+    position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 0; background: var(--bg); border-bottom: 1px solid var(--rule);
+  }
+  .wordmark { font-family: "Archivo"; font-weight: 900; font-size: 17px; }
+  .wordmark span { color: var(--accent); }
+  .topnav { display: flex; gap: 20px; font-size: 13px; font-weight: 600; }
+  .topnav a { text-decoration: none; color: var(--ink-muted); }
+  .topnav a:hover { color: var(--ink); }
+
+  .hero { padding: 48px 0 8px; }
+  .eyebrow {
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--accent); margin-bottom: 14px;
+  }
+  h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.05; }
+  .hero-sub { font-size: 15.5px; color: var(--ink-muted); margin-top: 16px; line-height: 1.6; max-width: 600px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 20px; margin-top: 26px;
+  }
+  textarea {
+    width: 100%; min-height: 260px; font-family: "IBM Plex Mono", monospace; font-size: 12.5px;
+    background: var(--chip-bg); color: var(--ink); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 12px; resize: vertical; line-height: 1.5;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+  input[type="file"] { font-size: 13px; color: var(--ink-muted); }
+  button.btn {
+    font-family: "IBM Plex Sans"; font-weight: 700; font-size: 14px; cursor: pointer;
+    padding: 12px 20px; border-radius: 3px; border: 1px solid var(--ink);
+    background: var(--ink); color: var(--bg);
+  }
+  button.btn:disabled { opacity: 0.55; cursor: default; }
+  .limit-note { font-size: 12px; color: var(--ink-muted); margin-top: 8px; }
+
+  #status { font-size: 13px; margin-top: 14px; }
+  .status-pending { color: var(--ink-muted); }
+  .status-error { color: var(--accent); font-weight: 600; }
+
+  #results { margin-top: 8px; }
+  .result-card { margin-top: 18px; }
+  .contract-name { font-family: "IBM Plex Mono"; font-weight: 500; font-size: 14px; }
+  .score-row { display: flex; align-items: baseline; gap: 10px; margin: 10px 0 14px; }
+  .score-num { font-family: "Archivo"; font-weight: 900; font-size: 40px; }
+  .score-label { font-size: 12.5px; color: var(--ink-muted); max-width: 220px; line-height: 1.4; }
+
+  .flag-group-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-muted); margin: 14px 0 6px;
+  }
+  .flag-group-label:first-of-type { margin-top: 0; }
+  .flag-card { background: var(--chip-bg); border: 1px solid var(--rule); border-radius: 4px; padding: 12px 14px; margin-top: 8px; }
+  .flag-card.safe { border-color: var(--good); }
+  .flag-title { font-family: "IBM Plex Mono"; font-size: 12.5px; }
+  .flag-title .hot { color: var(--accent); }
+  .flag-title .good { color: var(--good); }
+  .flag-sub { font-size: 12px; color: var(--ink-muted); margin-top: 4px; line-height: 1.5; }
+  .unanalyzable-note {
+    border: 1px solid var(--accent); color: var(--accent); border-radius: 4px;
+    padding: 12px 14px; font-size: 13px; margin-top: 10px;
+  }
+
+  footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--ink-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="wordmark">PARA<span>CHECK</span></div>
+    <nav class="topnav">
+      <a href="./">Home</a>
+      <a href="./app.html">Dashboard</a>
+    </nav>
+  </div>
+
+  <div class="hero">
+    <div class="eyebrow">Static analyzer, on your contract</div>
+    <h1>Upload a contract. See where it conflicts.</h1>
+    <p class="hero-sub">
+      Paste or upload a single Solidity file. ParaCheck runs the same Slither-based
+      classifier used on NaiveAMM and ShardedAMM elsewhere on this site, and flags
+      every storage slot that will conflict under concurrent execution on Monad.
+    </p>
+  </div>
+
+  <div class="card">
+    <input type="file" id="file-input" accept=".sol" />
+    <textarea id="source-input" placeholder="// paste a single Solidity file here, or choose one above
+pragma solidity ^0.8.24;
+
+contract Example {
+    uint256 public total;
+
+    function increment() external {
+        total += 1;
+    }
+}"></textarea>
+    <div class="controls">
+      <button class="btn" id="analyze-button" type="button">Analyze</button>
+      <span class="limit-note">One file, up to 100KB. Fixed to Solidity 0.8.24 - other pragma versions may fail to compile.</span>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div id="results"></div>
+
+  <footer>
+    Runs server-side against a bundled solc 0.8.24 - nothing is stored, each request is
+    analyzed fresh and discarded. See <a href="https://github.com/kodykebab/venus" target="_blank" rel="noopener">the source</a>
+    for exactly what the classifier checks.
+  </footer>
+</div>
+
+<script>
+const fileInput = document.getElementById("file-input");
+const sourceInput = document.getElementById("source-input");
+const analyzeButton = document.getElementById("analyze-button");
+const statusEl = document.getElementById("status");
+const resultsEl = document.getElementById("results");
+
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+  sourceInput.value = await file.text();
+});
+
+function renderReport(report) {
+  const el = document.createElement("div");
+  el.className = "card result-card";
+
+  if (report.unanalyzable) {
+    el.innerHTML = `<div class="unanalyzable-note">${report.reason}</div>`;
+    return el;
+  }
+
+  const scoreColor = report.parallelismScore >= 70 ? "var(--good)" : report.parallelismScore >= 30 ? "var(--accent)" : "var(--accent)";
+  const safeFunctions = report.safeFunctions || [];
+
+  const safeHtml = safeFunctions.length
+    ? `<div class="flag-group-label">Safe</div>
+       ${safeFunctions.map(fn => `<div class="flag-card safe"><div class="flag-title"><span class="good">${fn}()</span> — no hot-slot touches</div></div>`).join("")}`
+    : "";
+
+  const flagsHtml = report.flags.length
+    ? `<div class="flag-group-label">Hot</div>
+       ${report.flags.map(f => `
+        <div class="flag-card">
+          <div class="flag-title"><span class="hot">${f.slot}</span> — touched by ${f.touchedBy.join(", ")}</div>
+          <div class="flag-sub">${f.suggestedFix}</div>
+        </div>`).join("")}`
+    : `<div class="flag-group-label">No hot slots flagged</div>`;
+
+  el.innerHTML = `
+    <div class="contract-name">${report.contract}</div>
+    <div class="score-row">
+      <span class="score-num" style="color:${scoreColor}">${report.parallelismScore}</span>
+      <span class="score-label">/100 parallelism score — share of state-changing functions with no hot-slot touch</span>
+    </div>
+    ${safeHtml}
+    ${flagsHtml}
+  `;
+  return el;
+}
+
+async function analyze() {
+  const source = sourceInput.value;
+  resultsEl.innerHTML = "";
+  statusEl.className = "status-pending";
+  statusEl.textContent = "Compiling and analyzing…";
+  analyzeButton.disabled = true;
+
+  try {
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source }),
+    });
+    const data = await res.json();
+
+    if (data.unanalyzable) {
+      statusEl.className = "status-error";
+      statusEl.textContent = "";
+      resultsEl.appendChild(renderReport(data));
+      return;
+    }
+
+    statusEl.textContent = "";
+    for (const report of data.contracts) {
+      resultsEl.appendChild(renderReport(report));
+    }
+  } catch (err) {
+    statusEl.className = "status-error";
+    statusEl.textContent = `Failed: ${err.message}`;
+  } finally {
+    analyzeButton.disabled = false;
+  }
+}
+
+analyzeButton.addEventListener("click", analyze);
+</script>
+</body>
+</html>
