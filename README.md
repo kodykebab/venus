@@ -58,6 +58,29 @@ is a deterministic function of swap size (`bandOf(amountIn) = (amountIn / bandWi
 bandCount`), so swaps of different sizes touch different storage slots and don't conflict
 with each other.
 
+## CLI
+
+A single `paracheck` wrapper at the repo root dispatches to everything else:
+
+```bash
+./paracheck contracts/samples/StakingPoolSample.sol   # analyze one Solidity file
+./paracheck analyze                                    # regenerate demo-page static reports
+./paracheck loadtest --chain-id 10143 --traders 5 --bands 3
+./paracheck livetx --contract naive --amount 5
+./paracheck deployment-info --chain-id 10143
+./paracheck config                                      # show resolved config + where it came from
+./paracheck --help
+```
+
+A `.sol` path is analyzed directly (single, importless file - no `import` resolution);
+anything else forwards to `analyzer/cli.ts`. Non-secret defaults (Python venv path,
+Foundry bin directory, chain ID) come from [`paracheck.json`](paracheck.json) at the repo
+root, falling back to `config.json` if that file doesn't exist - `paracheck config` shows
+exactly what got resolved. Secrets never go in either file: `loadtest`/`livetx` still read
+`RPC_URL`, `DYNAMIC_RPC_URL`, `LOADTEST_PRIVATE_KEYS`, `LIVETX_PRIVATE_KEY` from `.env` /
+your shell environment, same as always. Global flags (`--config`, `--venv`,
+`--foundry-bin`) override the config file and must come before the command.
+
 ## Running it yourself
 
 ### Prerequisites

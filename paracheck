@@ -1,20 +1,135 @@
 #!/usr/bin/env bash
-# ParaCheck CLI wrapper.
-#
-#   paracheck <file>.sol [--solc PATH] [--out FILE]   analyze a single self-contained
-#                                                      Solidity file (no imports)
-#   paracheck analyze|loadtest|livetx|deployment-info  forwards to analyzer/cli.ts
-#
-# Shared, non-secret defaults live in paracheck.json (repo root). Secrets (RPC_URL,
-# private keys) stay in .env / your shell environment - never put them in paracheck.json,
-# it's committed to the repo.
+# ParaCheck CLI wrapper - run `paracheck --help` for usage.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/paracheck.json"
+VERSION="0.1.0"
+
+print_help() {
+  cat <<HELP
+paracheck $VERSION - static + dynamic parallelism-conflict analysis for Monad smart contracts
+
+USAGE
+  paracheck [global options] <command> [command options]
+
+COMMANDS
+  <file>.sol               Analyze a single, importless Solidity file
+  analyze                  Regenerate demo-page static reports for NaiveAMM/ShardedAMM
+  loadtest                 Fire concurrent swaps, measure real on-chain conflicts
+  livetx                   Fire one live transaction against a deployed contract
+  deployment-info          Write demo-page/reports/deployment.json from the latest deploy
+  config                   Print the resolved configuration and exit
+  help                     Show this help
+
+FILE ANALYSIS OPTIONS  (paracheck <file>.sol ...)
+  --solc PATH               Explicit solc binary (default: solc-select's active version)
+  --out FILE                 Write JSON to a file instead of stdout
+
+LOADTEST OPTIONS  (paracheck loadtest ...)
+  --chain-id N               Chain ID (default: from config, see below)
+  --traders N                 Number of load-test wallets
+  --bands N                   Number of ShardedAMM bands to test
+  --band-width WEI             Width of each band, in wei
+
+LIVETX OPTIONS  (paracheck livetx ...)
+  --contract naive|sharded    Which deployed contract to target
+  --amount N                   Token amount, in whole units
+  --chain-id N                 Chain ID (default: from config)
+
+DEPLOYMENT-INFO OPTIONS
+  --chain-id N                 Chain ID (default: from config)
+
+GLOBAL OPTIONS  (must come before the command)
+  --config FILE               Explicit config file (default: paracheck.json, falls back
+                               to config.json if that doesn't exist)
+  --venv PATH                  Python venv directory, relative to repo root
+                               (default from config: python.venv)
+  --foundry-bin PATH            Foundry bin directory (default from config: python.foundryBin)
+  -h, --help                    Show this help
+  -v, --version                  Show version
+
+CONFIGURATION
+  Non-secret defaults are read from paracheck.json at the repo root, falling back to
+  config.json if paracheck.json doesn't exist. Secrets (RPC_URL, private keys) never
+  belong in either file - set them via .env or your shell environment; loadtest/livetx
+  read RPC_URL, DYNAMIC_RPC_URL, LOADTEST_PRIVATE_KEYS, LIVETX_PRIVATE_KEY from there.
+
+  Run \`paracheck config\` to see exactly what's resolved and where it came from.
+
+EXAMPLES
+  paracheck contracts/samples/StakingPoolSample.sol
+  paracheck loadtest --chain-id 10143 --traders 5 --bands 3
+  paracheck livetx --contract naive --amount 5
+  paracheck --venv .venv2 sample.sol
+HELP
+}
+
+# ---------------------------------------------------------------------------
+# Global option parsing (must precede the command)
+# ---------------------------------------------------------------------------
+CONFIG_OVERRIDE=""
+VENV_OVERRIDE=""
+FOUNDRY_BIN_OVERRIDE=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help|help)
+      print_help
+      exit 0
+      ;;
+    -v|--version)
+      echo "paracheck $VERSION"
+      exit 0
+      ;;
+    --config)
+      CONFIG_OVERRIDE="$2"
+      shift 2
+      ;;
+    --venv)
+      VENV_OVERRIDE="$2"
+      shift 2
+      ;;
+    --foundry-bin)
+      FOUNDRY_BIN_OVERRIDE="$2"
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [ "$#" -eq 0 ]; then
+  print_help
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Config file resolution: explicit --config, else paracheck.json, else
+# config.json, else built-in defaults (no config file at all is fine).
+# ---------------------------------------------------------------------------
+CONFIG_FILE=""
+if [ -n "$CONFIG_OVERRIDE" ]; then
+  CONFIG_FILE="$CONFIG_OVERRIDE"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    echo "paracheck: --config file not found: $CONFIG_FILE" >&2
+    exit 1
+  fi
+else
+  for candidate in "paracheck.json" "config.json"; do
+    if [ -f "$SCRIPT_DIR/$candidate" ]; then
+      CONFIG_FILE="$SCRIPT_DIR/$candidate"
+      break
+    fi
+  done
+fi
 
 json_get() {
   # json_get <jq-path> <default>
+  if [ -z "$CONFIG_FILE" ]; then
+    echo "$2"
+    return
+  fi
   if command -v jq >/dev/null 2>&1; then
     jq -r "$1 // \"$2\"" "$CONFIG_FILE"
   else
@@ -32,14 +147,17 @@ except Exception:
   fi
 }
 
-PY_VENV="$(json_get '.python.venv' 'analyzer/.venv')"
-FOUNDRY_BIN="$(json_get '.python.foundryBin' '~/.foundry/bin')"
+PY_VENV="${VENV_OVERRIDE:-$(json_get '.python.venv' 'analyzer/.venv')}"
+FOUNDRY_BIN="${FOUNDRY_BIN_OVERRIDE:-$(json_get '.python.foundryBin' '~/.foundry/bin')}"
 FOUNDRY_BIN="${FOUNDRY_BIN/#\~/$HOME}"
 CHAIN_ID_DEFAULT="$(json_get '.chainId' '10143')"
 
-if [ "$#" -eq 0 ]; then
-  echo "Usage: paracheck <file>.sol | paracheck analyze|loadtest|livetx|deployment-info [options]" >&2
-  exit 1
+if [ "$1" = "config" ]; then
+  echo "config file : ${CONFIG_FILE:-<none found - using built-in defaults>}"
+  echo "venv        : $PY_VENV"
+  echo "foundry bin : $FOUNDRY_BIN"
+  echo "chain id    : $CHAIN_ID_DEFAULT"
+  exit 0
 fi
 
 export PATH="$FOUNDRY_BIN:$SCRIPT_DIR/$PY_VENV/bin:$PATH"
