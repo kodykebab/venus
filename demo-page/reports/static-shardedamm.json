@@ -19,5 +19,8 @@
       "suggestedFix": "'reserve1ByBand' is indexed by a shared/fixed key in addLiquidity - shard it by caller or another per-transaction key so concurrent calls resolve to different slots."
     }
   ],
+  "safeFunctions": [
+    "swap"
+  ],
   "unanalyzable": false
 }

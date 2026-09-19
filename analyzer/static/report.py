@@ -21,7 +21,7 @@ def analyze_contract(project_path: str, contract_name: str, source_file: str, fo
     try:
         contract = load_contract(project_path, contract_name, source_file, foundry_out_directory)
         function_accesses = extract_function_access(contract)
-        flags, parallelism_score = classify(contract, function_accesses)
+        flags, parallelism_score, safe_functions = classify(contract, function_accesses)
     except UnanalyzableContract as exc:
         return {
             "contract": contract_name,
@@ -43,6 +43,7 @@ def analyze_contract(project_path: str, contract_name: str, source_file: str, fo
         "contract": contract_name,
         "parallelismScore": parallelism_score,
         "flags": flags,
+        "safeFunctions": safe_functions,
         "unanalyzable": False,
     }
 

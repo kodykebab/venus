@@ -21,5 +21,6 @@
       "suggestedFix": "'reserve1' is a single global slot written/read by addLiquidity, swap - shard it (e.g. by price band, by caller) so concurrent calls touch different slots."
     }
   ],
+  "safeFunctions": [],
   "unanalyzable": false
 }

@@ -36,7 +36,7 @@ def _state_changing_accesses(function_accesses: list[FunctionAccess], contract: 
     return [fa for fa in function_accesses if fa.name in changing_names]
 
 
-def classify(contract: Contract, function_accesses: list[FunctionAccess]) -> tuple[list[dict], int]:
+def classify(contract: Contract, function_accesses: list[FunctionAccess]) -> tuple[list[dict], int, list[str]]:
     accesses = _state_changing_accesses(function_accesses, contract)
 
     real_slots = {
@@ -89,7 +89,7 @@ def classify(contract: Contract, function_accesses: list[FunctionAccess]) -> tup
             seen_hot_functions.update(touched_by)
 
     total_functions = {fa.name for fa in accesses}
-    safe_count = len(total_functions - seen_hot_functions)
-    parallelism_score = round(100 * safe_count / len(total_functions)) if total_functions else 100
+    safe_functions = sorted(total_functions - seen_hot_functions)
+    parallelism_score = round(100 * len(safe_functions) / len(total_functions)) if total_functions else 100
 
-    return flags, parallelism_score
+    return flags, parallelism_score, safe_functions

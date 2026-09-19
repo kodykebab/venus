@@ -101,6 +101,18 @@
   .flag-slot { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
   .flag-detail { color: var(--text); opacity: 0.85; margin-top: 4px; }
   .no-flags { color: var(--safe); font-size: 13px; font-weight: 600; }
+  .safe-list { margin: 0 0 14px; padding: 0; list-style: none; }
+  .safe-list li {
+    color: var(--safe); font-size: 13px; font-weight: 600;
+    padding: 6px 0; border-bottom: 1px solid var(--border);
+  }
+  .safe-list li:last-child { border-bottom: none; }
+  .safe-list li::before { content: "✓ "; }
+  .section-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-muted); margin: 14px 0 6px;
+  }
+  .section-label:first-of-type { margin-top: 0; }
 
   .bar-row { margin: 14px 0; }
   .bar-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
@@ -201,12 +213,20 @@ function renderStaticCard(report) {
   }
 
   const scoreColor = report.parallelismScore >= 70 ? "var(--safe)" : report.parallelismScore >= 30 ? "var(--accent)" : "var(--hot)";
+  const safeFunctions = report.safeFunctions || [];
+
+  const safeHtml = safeFunctions.length
+    ? `<div class="section-label">Safe — no hot-slot touches</div>
+       <ul class="safe-list">${safeFunctions.map(fn => `<li>${fn}()</li>`).join("")}</ul>`
+    : "";
+
   const flagsHtml = report.flags.length
-    ? report.flags.map(f => `
+    ? `<div class="section-label">Hot — flagged for conflicts</div>
+       ${report.flags.map(f => `
         <div class="flag hot">
           <span class="flag-slot">${f.slot}</span> — touched by ${f.touchedBy.join(", ")}
           <div class="flag-detail">${f.suggestedFix}</div>
-        </div>`).join("")
+        </div>`).join("")}`
     : `<p class="no-flags">No hot slots flagged.</p>`;
 
   el.innerHTML = `
@@ -215,6 +235,7 @@ function renderStaticCard(report) {
       <span class="score-value" style="color:${scoreColor}">${report.parallelismScore}</span>
       <span class="score-label">/ 100 parallelism score<br>(share of state-changing functions with no hot-slot touch)</span>
     </div>
+    ${safeHtml}
     ${flagsHtml}
   `;
   return el;

@@ -26,6 +26,7 @@ def test_global_counter_flagged_hot():
     assert slots == {"count"}
     assert report["flags"][0]["severity"] == "hot"
     assert set(report["flags"][0]["touchedBy"]) == {"increment", "incrementBy"}
+    assert report["safeFunctions"] == []
 
 
 def test_per_user_mapping_classified_safe():
@@ -37,6 +38,7 @@ def test_per_user_mapping_classified_safe():
     assert report["unanalyzable"] is False
     assert report["parallelismScore"] == 100
     assert report["flags"] == []
+    assert set(report["safeFunctions"]) == {"deposit", "withdraw"}
 
 
 def test_inline_assembly_is_unanalyzable_not_a_crash():
@@ -70,6 +72,7 @@ def test_naive_amm_reserves_are_hot():
     for flag in slots.values():
         assert flag["severity"] == "hot"
         assert set(flag["touchedBy"]) == {"addLiquidity", "swap"}
+    assert report["safeFunctions"] == []
 
 
 def test_sharded_amm_swap_is_safe_addliquidity_is_hot():
@@ -81,5 +84,6 @@ def test_sharded_amm_swap_is_safe_addliquidity_is_hot():
     for flag in report["flags"]:
         assert "swap" not in flag["touchedBy"]
         assert flag["touchedBy"] == ["addLiquidity"]
+    assert report["safeFunctions"] == ["swap"]
     # ShardedAMM's swap-only safety must score strictly better than NaiveAMM's 0.
     assert report["parallelismScore"] > 0
