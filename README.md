@@ -36,8 +36,6 @@ slots (all 5 transactions mutually conflicting); 3 concurrent `ShardedAMM` swaps
 band, landed in the same block and produced **zero** conflicts. See
 `demo-page/reports/dynamic-comparison.json` for the full trace-derived data.
 
-(See [handoff.md](handoff.md) for the full build spec this repo was built from.)
-
 ## Repo layout
 
 ```

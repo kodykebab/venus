@@ -189,6 +189,19 @@
   }
   .verified-badge::before { content: "●"; font-size: 8px; }
 
+  /* toolkit */
+  .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
+  @media (max-width: 720px) { .feature-grid { grid-template-columns: 1fr; } }
+  .feature-card { border: 1px solid var(--rule); border-radius: 4px; padding: 20px; background: var(--surface); }
+  .feature-name { font-family: "Archivo"; font-weight: 800; font-size: 16px; margin-bottom: 4px; }
+  .feature-tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
+  .feature-cmd {
+    display: block; font-family: "IBM Plex Mono"; font-size: 12px; background: var(--chip-bg);
+    padding: 8px 10px; border-radius: 3px; margin: 10px 0; word-break: break-all;
+  }
+  .feature-card p.feature-desc { font-size: 13px; color: var(--ink-muted); line-height: 1.6; margin: 0; }
+  .feature-card a.feature-link { display: inline-block; margin-top: 12px; font-size: 12.5px; font-weight: 600; }
+
   /* live-tx */
   .livetx-block { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--rule); }
   .livetx-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -220,9 +233,9 @@
     <nav class="topnav">
       <a href="#proof">Proof</a>
       <a href="#livetx">Live tx</a>
+      <a href="#toolkit">Toolkit</a>
       <a href="#case">The case</a>
       <a href="#now">Why now</a>
-      <a href="./upload.html">Analyze yours</a>
       <a href="#code">Code</a>
     </nav>
   </div>
@@ -292,6 +305,58 @@
             <button class="btn btn-primary" id="livetx-button" type="button">Fire live swap</button>
           </div>
           <div id="livetx-status"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="toolkit">
+    <div class="row">
+      <div class="num-col">
+        <div class="num">Toolkit</div>
+        <div class="sec-eyebrow">Not just this page</div>
+      </div>
+      <div>
+        <h2>Analyze any contract — terminal, browser, or CI pipeline.</h2>
+        <p class="body-text">
+          Everything above runs on the same static + dynamic analyzers, exposed three
+          more ways. No separate product, no separate report format.
+        </p>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <div class="feature-tag">CLI</div>
+            <div class="feature-name">paracheck</div>
+            <code class="feature-cmd">./paracheck contract.sol</code>
+            <p class="feature-desc">
+              Point it at any self-contained Solidity file and get the same hot/safe
+              report this page shows, from your own terminal. <code class="mono">paracheck --help</code>
+              for loadtest/livetx/deployment-info too.
+            </p>
+            <a class="feature-link" href="https://github.com/kodykebab/venus#cli" target="_blank" rel="noopener">CLI docs →</a>
+          </div>
+          <div class="feature-card">
+            <div class="feature-tag">Browser</div>
+            <div class="feature-name">Upload &amp; analyze</div>
+            <code class="feature-cmd">/upload.html</code>
+            <p class="feature-desc">
+              Paste or upload a <code class="mono">.sol</code> file and get the report
+              back in your browser — no install, runs server-side against a bundled
+              solc compiler.
+            </p>
+            <a class="feature-link" href="./upload.html">Try it →</a>
+          </div>
+          <div class="feature-card">
+            <div class="feature-tag">CI</div>
+            <div class="feature-name">GitHub Action</div>
+            <code class="feature-cmd">uses: kodykebab/venus/.github/actions/analyze@main</code>
+            <p class="feature-desc">
+              Drop one workflow file into any repo — every PR touching a flagged
+              contract gets a comment with the report, with an optional score
+              threshold that fails the check outright. No GitHub App, no OAuth, no
+              server.
+            </p>
+            <a class="feature-link" href="https://github.com/kodykebab/venus#github-action" target="_blank" rel="noopener">Action docs →</a>
+          </div>
         </div>
       </div>
     </div>
@@ -463,6 +528,7 @@
     <div class="footer-links">
       <a class="btn btn-primary" href="https://github.com/kodykebab/venus" target="_blank" rel="noopener">github.com/kodykebab/venus →</a>
       <a class="btn btn-secondary" href="./app.html">Full dashboard</a>
+      <a class="btn btn-secondary" href="./upload.html">Analyze a contract</a>
       <a class="btn btn-secondary" href="https://testnet.monadscan.com/address/0x65a0C262a20a34568242ABD95894C79E28CC5Fb8" target="_blank" rel="noopener">NaiveAMM on Monadscan</a>
       <a class="btn btn-secondary" href="https://testnet.monadscan.com/address/0x3e3b4e31931f341F10E0f102ff885357Ac5D3834" target="_blank" rel="noopener">ShardedAMM on Monadscan</a>
     </div>
