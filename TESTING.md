@@ -16,36 +16,45 @@ Expect `18 passed, 0 failed`. Covers normal swaps, boundary amounts, band-bounda
 
 ```bash
 cd analyzer/static
-PATH="$HOME/.foundry/bin:.venv/bin:$PATH" .venv/bin/python3 -m pytest test_classifier.py -v
+export PATH="$HOME/.foundry/bin:../.venv/bin:$PATH"
+../.venv/bin/python3 -m pytest test_classifier.py -v
 ```
 Expect `6 passed` — three hand-written fixtures (global counter → hot, per-user mapping →
 safe, inline assembly → `unanalyzable` not a crash) plus regression checks against the
-real `NaiveAMM`/`ShardedAMM`.
+real `NaiveAMM`/`ShardedAMM`. Note the venv lives at `analyzer/.venv` (one level up from
+this directory), not inside `static/` itself - that's where `cli.ts`'s `paracheck analyze`
+expects to find it too. `export` (not an inline `VAR=val` prefix) matters here - later
+lines in the same block need it too, not just the first.
 
 Run it directly against the example fixture contracts in `analyzer/static/fixtures/`
 (these are the hand-written known-correct cases the pytest suite above checks against):
 
 ```bash
 cd analyzer/static
-PATH="$HOME/.foundry/bin:.venv/bin:$PATH" .venv/bin/python3 report.py \
+export PATH="$HOME/.foundry/bin:../.venv/bin:$PATH"
+
+../.venv/bin/python3 report.py \
   fixtures/GlobalCounter.sol GlobalCounter fixtures/GlobalCounter.sol
 # -> parallelismScore: 0, "count" flagged hot (touched by increment + incrementBy)
 
-.venv/bin/python3 report.py \
+../.venv/bin/python3 report.py \
   fixtures/PerUserMapping.sol PerUserMapping fixtures/PerUserMapping.sol
 # -> parallelismScore: 100, no flags (mapping indexed by msg.sender)
 
-.venv/bin/python3 report.py \
+../.venv/bin/python3 report.py \
   fixtures/InlineAssemblyContract.sol InlineAssemblyContract fixtures/InlineAssemblyContract.sol
 # -> unanalyzable: true, "manual review recommended" - never a crash
 ```
 
 Or against the real demo contracts (a Foundry project path + contract name + source file):
 ```bash
-.venv/bin/python3 report.py ../../contracts NaiveAMM ../../contracts/src/NaiveAMM.sol
+cd analyzer/static
+export PATH="$HOME/.foundry/bin:../.venv/bin:$PATH"
+
+../.venv/bin/python3 report.py ../../contracts NaiveAMM ../../contracts/src/NaiveAMM.sol
 # -> parallelismScore: 0, reserve0/reserve1 both hot (touched by addLiquidity + swap)
 
-.venv/bin/python3 report.py ../../contracts ShardedAMM ../../contracts/src/ShardedAMM.sol
+../.venv/bin/python3 report.py ../../contracts ShardedAMM ../../contracts/src/ShardedAMM.sol
 # -> parallelismScore: 50, safeFunctions: ["swap"], only addLiquidity flagged hot
 ```
 

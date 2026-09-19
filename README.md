@@ -77,11 +77,12 @@ cp .env.example .env   # fill in RPC_URL / DYNAMIC_RPC_URL / keys as needed
 # contracts
 cd contracts && forge install && forge build && forge test
 
-# static analyzer
-cd ../analyzer/static
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# static analyzer - venv lives at analyzer/.venv (cli.ts's `paracheck analyze` expects it there)
+cd ../analyzer
+python3 -m venv .venv && .venv/bin/pip install -r static/requirements.txt
 .venv/bin/solc-select install 0.8.24 && .venv/bin/solc-select use 0.8.24
-PATH="$HOME/.foundry/bin:.venv/bin:$PATH" .venv/bin/python3 -m pytest test_classifier.py -v
+cd static
+PATH="$HOME/.foundry/bin:../.venv/bin:$PATH" ../.venv/bin/python3 -m pytest test_classifier.py -v
 
 # dynamic analyzer / CLI
 cd ../
