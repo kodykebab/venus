@@ -10,6 +10,7 @@ on:
       - "contracts/samples/StakingPoolSample.sol"
       - ".github/actions/analyze/**"
       - ".github/workflows/paracheck-analyze.yml"
+  workflow_dispatch: {} # Actions tab -> this workflow -> "Run workflow", no PR needed
 
 permissions:
   contents: read
