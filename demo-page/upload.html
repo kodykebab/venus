@@ -109,6 +109,27 @@
 
   footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--ink-muted); }
 </style>
+<style>
+  :root { --bg:#f2f0ea; --surface:#fbfaf7; --ink:#101114; --ink-muted:#5f6268; --rule:#c8c9c7; --accent:#e3311d; --good:#0b8069; --chip-bg:#e4e3de; --cobalt:#1837c7; }
+  body { background-color:var(--bg); background-image:linear-gradient(rgba(16,17,20,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(16,17,20,.045) 1px,transparent 1px); background-size:32px 32px; padding:0 28px; }
+  .wrap { max-width:880px; }
+  .topbar { padding:20px 0; border-bottom:2px solid var(--ink); background:color-mix(in srgb,var(--bg) 92%,transparent); backdrop-filter:blur(10px); }
+  .wordmark { font-size:18px; letter-spacing:.02em; }
+  .topnav { text-transform:uppercase; letter-spacing:.06em; font-size:11px; }
+  .topnav a:hover { color:var(--accent); }
+  .hero { padding:80px 0 26px; }
+  .eyebrow { letter-spacing:.14em; font-size:11px; }
+  h1 { font-size:clamp(44px,6vw,76px); line-height:.92; letter-spacing:-.055em; }
+  .hero-sub { max-width:620px; font-size:16px; line-height:1.65; }
+  .card { border-radius:0; border:2px solid var(--ink); box-shadow:8px 8px 0 var(--accent); }
+  textarea { border-radius:0; background:var(--surface); border-color:var(--ink); }
+  button.btn { min-height:46px; border-radius:0; background:var(--accent); border-color:var(--accent); text-transform:uppercase; letter-spacing:.04em; font-size:11px; }
+  button.btn:hover { background:var(--ink); }
+  .flag-card, .unanalyzable-note { border-radius:0; }
+  a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible { outline:3px solid var(--cobalt); outline-offset:4px; }
+  @media (max-width:720px) { body { padding:0 18px; } .hero { padding:64px 0 22px; } .card { box-shadow:5px 5px 0 var(--accent); } }
+  @media (prefers-reduced-motion:reduce) { *,*::before,*::after { transition-duration:.01ms !important; } }
+</style>
 </head>
 <body>
 <div class="wrap">

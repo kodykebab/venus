@@ -96,6 +96,41 @@ def test_llm_layer_degrades_without_credentials(monkeypatch):
     assert synthesize.synthesize_review({"unanalyzable": True}) is None
 
 
+def test_llm_layer_calls_messages_parse_with_injected_client():
+    import synthesize
+
+    class FakeMessages:
+        def __init__(self):
+            self.arguments = None
+
+        def parse(self, **kwargs):
+            self.arguments = kwargs
+            return type("Response", (), {
+                "stop_reason": "end_turn",
+                "parsed_output": "parsed review",
+            })()
+
+    class FakeClient:
+        def __init__(self):
+            self.messages = FakeMessages()
+
+    client = FakeClient()
+    result = synthesize.synthesize_review(
+        {"findings": [{"check": "hot-slot"}]},
+        diff="diff --git a/A.sol b/A.sol",
+        source="contract A {}",
+        model="test-model",
+        client=client,
+        api_key="test-key",
+    )
+
+    assert result == "parsed review"
+    assert client.messages.arguments["model"] == "test-model"
+    assert client.messages.arguments["output_format"] is synthesize.SynthesizedReview
+    assert "hot-slot" in client.messages.arguments["messages"][0]["content"]
+    assert "contract A {}" in client.messages.arguments["messages"][0]["content"]
+
+
 # --- project mode -----------------------------------------------------------
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -9,6 +9,7 @@ contracts/broadcast/*/10143/dry-run/
 node_modules/
 dist/
 *.tsbuildinfo
+cloudflare/.wrangler/
 
 # Python
 venv/

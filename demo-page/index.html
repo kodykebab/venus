@@ -110,6 +110,19 @@
   .proof-cell { padding: 26px 26px; background: var(--surface); }
   .proof-cell + .proof-cell { border-left: 1px solid var(--rule); }
   @media (max-width: 640px) {
+    :root {
+      --bg: #f2f0ea;
+      --surface: #fbfaf7;
+      --ink: #101114;
+      --ink-muted: #5f6268;
+      --rule: #c8c9c7;
+      --accent: #e3311d;
+      --accent-ink: #fffdf8;
+      --good: #0b8069;
+      --chip-bg: #e4e3de;
+      --cobalt: #1837c7;
+    }
+
     .proof-strip { grid-template-columns: 1fr; }
     .proof-cell + .proof-cell { border-left: none; border-top: 1px solid var(--rule); }
   }
@@ -225,6 +238,128 @@
   .footer-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 28px; }
   .footer-meta { margin-top: 46px; font-size: 12.5px; color: var(--ink-muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 </style>
+<style>
+  body {
+    background-image: linear-gradient(rgba(16,17,20,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(16,17,20,.045) 1px, transparent 1px);
+    background-size: 32px 32px;
+    padding: 0 28px;
+  }
+  .wrap { max-width: 1240px; }
+  .topbar {
+    padding: 20px 0;
+    border-bottom: 2px solid var(--ink);
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(10px);
+  }
+  .wordmark { font-size: 18px; letter-spacing: .02em; }
+  .topnav { gap: 22px; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+  .topnav a { color: var(--ink); }
+  .topnav a:hover { color: var(--accent); }
+  .hero {
+    min-height: 650px;
+    display: grid;
+    align-content: center;
+    grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr);
+    column-gap: 9vw;
+    padding: 104px 0 72px;
+  }
+  .hero > *:not(.proof-strip) { grid-column: 1; }
+  .hero .eyebrow { margin-bottom: 28px; }
+  .eyebrow { letter-spacing: .14em; font-size: 11px; }
+  .hero h1 { max-width: 820px; font-size: clamp(48px, 7.5vw, 108px); line-height: .91; letter-spacing: -.055em; }
+  .hero-sub { max-width: 570px; margin-top: 30px; font-size: 16px; line-height: 1.65; }
+  .cta-row { margin-top: 36px; gap: 10px; }
+  .btn { min-height: 46px; border-radius: 0; padding: 13px 18px; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { background: var(--ink); border-color: var(--ink); }
+  .btn-secondary { border-color: var(--ink); }
+  .btn-secondary:hover { background: var(--ink); color: var(--bg); }
+  .proof-strip {
+    grid-column: 2; grid-row: 1 / span 5; align-self: center;
+    display: block; margin: 0; border: 2px solid var(--ink); border-radius: 0;
+    background: var(--ink); box-shadow: 12px 12px 0 var(--accent); transform: rotate(1.2deg);
+  }
+  .proof-cell { min-height: 185px; padding: 26px; background: var(--ink); color: var(--bg); }
+  .proof-cell + .proof-cell { border-left: none; border-top: 1px solid #4a4b4f; }
+  .proof-name { color: #aeb1b5; font-size: 10px; letter-spacing: .13em; }
+  .proof-score { display: flex; align-items: baseline; gap: 10px; color: var(--bg); font-size: 72px; letter-spacing: -.06em; }
+  .proof-score small { color: #aeb1b5; font-size: 13px; letter-spacing: 0; line-height: 1.2; }
+  .proof-detail, .loading-note { color: #aeb1b5; }
+  section { padding: 88px 0; border-top: 2px solid var(--ink); }
+  .row { grid-template-columns: 210px minmax(0, 1fr); gap: 58px; }
+  .num { color: var(--accent); font-size: 13px; letter-spacing: .08em; }
+  .sec-eyebrow { font-size: 11px; letter-spacing: .12em; }
+  section h2 { max-width: 800px; font-size: clamp(30px, 4.2vw, 58px); line-height: .98; letter-spacing: -.045em; }
+  .body-text { max-width: 680px; font-size: 16px; line-height: 1.7; }
+  .stat-grid { border-radius: 0; border: 2px solid var(--ink); background: var(--ink); gap: 1px; }
+  .stat { padding: 24px 20px; }
+  .stat-value { font-size: 34px; letter-spacing: -.04em; }
+  .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .flag-card, .feature-card, .addr-chip { border-radius: 0; }
+  .flag-card { padding: 18px 20px; }
+  .feature-grid { gap: 0; border: 2px solid var(--ink); background: var(--ink); }
+  .feature-card { border: 0; border-right: 1px solid var(--rule); border-radius: 0; padding: 24px; }
+  .feature-card:last-child { border-right: 0; }
+  .feature-name { font-size: 19px; }
+  .feature-tag { letter-spacing: .1em; }
+  .livetx-block { margin-top: 38px; padding-top: 28px; }
+  select, input[type="text"] { border-radius: 0; min-height: 44px; background: var(--surface); }
+  footer { padding: 86px 0 100px; border-top: 2px solid var(--ink); }
+  .footer-head { font-size: clamp(34px, 5vw, 68px); line-height: .95; letter-spacing: -.05em; }
+  a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 4px; }
+  @media (max-width: 820px) {
+    body { padding: 0 18px; }
+    .hero { min-height: 0; display: block; padding: 72px 0 54px; }
+    .hero h1 { font-size: clamp(48px, 13vw, 82px); }
+    .proof-strip { margin: 58px 10px 12px 0; transform: none; }
+    section { padding: 62px 0; }
+    .row { grid-template-columns: 1fr; gap: 18px; }
+    .feature-card { border-right: 0; border-bottom: 1px solid var(--rule); }
+    .feature-card:last-child { border-bottom: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+  }
+</style>
+<style>
+  body { background-image: linear-gradient(rgba(16,17,20,.028) 1px, transparent 1px), linear-gradient(90deg, rgba(16,17,20,.028) 1px, transparent 1px); }
+  .topbar { max-width: 1180px; margin: 0 auto; }
+  .hero {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 390px);
+    grid-template-areas: "eyebrow proof" "title proof" "sub proof" "cta proof" "meta proof";
+    grid-template-rows: auto auto auto auto auto;
+    align-items: center;
+    column-gap: clamp(48px, 8vw, 120px);
+    row-gap: 18px;
+    padding: 92px 0 76px;
+  }
+  .hero .eyebrow { grid-area: eyebrow; margin-bottom: 22px; }
+  .hero h1 { grid-area: title; }
+  .hero .hero-sub { grid-area: sub; }
+  .hero .cta-row { grid-area: cta; }
+  .hero .hero-meta { grid-area: meta; }
+  .hero h1 { max-width: 720px; font-size: clamp(44px, 5.4vw, 78px); line-height: .96; letter-spacing: -.05em; }
+  .hero-sub { max-width: 590px; margin-top: 24px; font-size: 16px; line-height: 1.65; }
+  .cta-row { margin-top: 30px; }
+  .hero-meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--ink-muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .hero-meta span { display: inline-flex; align-items: center; gap: 7px; }
+  .hero-meta i { width: 7px; height: 7px; display: inline-block; background: var(--good); border-radius: 50%; }
+  .proof-strip { grid-area: proof; align-self: center; margin: 0; border-radius: 8px; transform: none; box-shadow: 0 24px 70px rgba(16,17,20,.18), 10px 10px 0 var(--accent); }
+  .proof-cell { min-height: 172px; }
+  .proof-score { font-size: 64px; }
+  section { padding: 76px 0; }
+  section h2 { font-size: clamp(28px, 3.5vw, 48px); }
+  .row { gap: 48px; }
+  @media (max-width: 820px) {
+    .hero { display: block; padding: 68px 0 54px; }
+    .hero h1 { max-width: 620px; font-size: clamp(44px, 11vw, 70px); }
+    .hero-meta { margin-top: 24px; }
+    .proof-strip { margin: 48px 10px 10px 0; }
+  }
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -241,21 +376,19 @@
   </div>
 
   <section class="hero" style="border-top:none; padding-top:56px;">
-    <div class="eyebrow">Parallelism-conflict analysis for Monad</div>
-    <h1>Monad promises parallel<br>execution. Most contracts<br>never claim it.</h1>
+    <div class="eyebrow">ParaCheck / contract performance intelligence</div>
+    <h1>Find the storage bottlenecks before your users do.</h1>
     <p class="hero-sub">
-      Optimistic parallel execution is Monad's core bet: transactions run in parallel, and
-      anything that collides gets re-executed. A contract with naive storage — one global
-      reserve pair, one shared counter — forces every transaction through that collision path,
-      quietly turning "parallel" into "sequential, with overhead." Nobody tells Solidity
-      developers this is happening. ParaCheck does — statically, and with real measured
-      on-chain data.
+      Static analysis and live transaction traces for Solidity teams shipping on
+      parallel-execution chains. See which functions collide, why they collide, and what to
+      change before throughput becomes a production incident.
     </p>
     <div class="cta-row">
-      <a class="btn btn-primary" href="#livetx">Fire a live transaction →</a>
-      <a class="btn btn-secondary" href="https://github.com/kodykebab/venus" target="_blank" rel="noopener">View the code</a>
-      <a class="btn btn-secondary" href="./app.html">Full dashboard</a>
+      <a class="btn btn-primary" href="./upload.html">Analyze a contract <span aria-hidden="true">→</span></a>
+      <a class="btn btn-secondary" href="#proof">See live proof</a>
+      <a class="btn btn-secondary" href="./app.html">Open dashboard</a>
     </div>
+    <div class="hero-meta"><span><i></i>Live on Monad Testnet</span><span>Static + dynamic analysis</span><span>No config file</span></div>
 
     <div class="proof-strip" id="proof-strip">
       <div class="proof-cell"><span class="loading-note">Loading live report…</span></div>

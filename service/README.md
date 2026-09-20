@@ -50,14 +50,20 @@ cp service/.env.example service/.env   # then fill it in
 | `GITHUB_CLIENT_ID` | yes | For the OAuth code exchange |
 | `GITHUB_CLIENT_SECRET` | yes | " |
 | `GITHUB_APP_SLUG` | yes | The URL slug, e.g. `paracheck-ci` |
-| `ANTHROPIC_API_KEY` | no | Enables Claude synthesis; without it reviews still post, rendered from raw findings |
+| `CLERK_PUBLISHABLE_KEY` | no* | Browser key for paid account sign-in |
+| `CLERK_JWT_KEY` | no* | PEM verification key for Clerk session tokens |
+| `CLERK_ISSUER` | no | Optional issuer check for Clerk tokens |
+| `CLERK_AUDIENCE` | no | Optional audience check for Clerk tokens |
+| `PARACHECK_CLAUDE_ENABLED` | no | Future feature flag; keep `0` for the initial deterministic launch |
+| `ANTHROPIC_API_KEY` | no | Reserved for the future Claude synthesis service |
 | `PARACHECK_DB` | no | SQLite path (default `paracheck.db`) |
 | `PARACHECK_MIN_SEVERITY` | no | Drop findings below this (default `low`) |
 | `PARACHECK_FAIL_ON` | no | Fail the check at or above this severity |
 | `PARACHECK_CHAIN` | no | Target chain (default `monad`); gates parallelism analysis |
-| `STRIPE_SECRET_KEY` | no | Enables subscriptions; unset means trial-only mode |
-| `STRIPE_PRICE_ID` | no | The recurring price to check out |
-| `STRIPE_WEBHOOK_SECRET` | no | Verifies Stripe webhooks |
+| `STRIPE_SECRET_KEY` | yes | Creates hosted Checkout sessions |
+| `STRIPE_HOBBY_PRICE_ID` | yes | Stripe Price for Hobby, 50 reviews/month |
+| `STRIPE_PRO_PRICE_ID` | yes | Stripe Price for Pro, 250 reviews/month |
+| `STRIPE_WEBHOOK_SECRET` | yes | Verifies Stripe webhooks and plan cancellation events |
 
 \* one of the two key variables.
 
@@ -90,18 +96,24 @@ Send a user to `/install`. That's the whole flow:
 
 ## Billing
 
-Every installation starts on a trial (50 reviews) so the one-click install stays
-one click — nobody types a card number to finish setting up. When the trial runs
-out, `review_allowed()` blocks further reviews and the check run says why.
+There is no free tier. Every installation starts as `unpaid` and reviews remain
+blocked until a Hobby or Pro Stripe Checkout completes. Hobby includes 50 reviews
+per billing period and Pro includes 250. Enterprise is a sales-led plan through
+`/enterprise` and is configured manually.
 
-`/billing/upgrade?installation_id=N` opens Stripe Checkout; the completed
-`checkout.session.completed` webhook moves the account to `pro`, and a cancelled
-subscription or failed payment moves it back to `trial`. Stripe webhooks are
+When Clerk is configured, `/account?installation_id=N` signs the user in with
+Clerk and opens hosted Stripe Checkout. Without Clerk, the existing GitHub-session
+checkout remains available at `/billing/upgrade?installation_id=N`. The completed
+`checkout.session.completed` webhook activates the selected plan and replenishes
+its review quota; a cancelled subscription or failed payment moves it back to
+`unpaid`. Stripe webhooks are
 signature-verified with a timestamp tolerance, so a captured webhook can't be
 replayed later to re-upgrade a cancelled account.
 
-With no Stripe keys configured the service runs in trial-only mode and says so
-on the dashboard, rather than failing or pretending an upgrade happened.
+If Stripe is not configured, the service blocks reviews and says so on the
+dashboard rather than pretending an upgrade happened. Set the two Stripe Prices
+above measured hosting and operational costs per paid account. Claude synthesis
+is disabled for the initial launch and does not factor into launch pricing.
 
 ## Security notes
 
@@ -124,8 +136,9 @@ These are load-bearing, not boilerplate:
 
 ## Known gaps
 
-- Reviews run as FastAPI background tasks. That's honest for v1 but means a
-  restart drops in-flight work — a real queue is the next step.
+- Reviews run through the durable SQLite queue, but the worker currently shares
+  the service process by default. Run it separately when you need independent
+  scaling or worker restarts.
 - SQLite. Fine for one worker; swap `store.py` for Postgres before scaling out.
 - Reviews are scoped to one project per repository; monorepos with several
   independent Solidity projects will need per-path configuration.

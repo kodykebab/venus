@@ -58,6 +58,22 @@ export PATH="$HOME/.foundry/bin:../.venv/bin:$PATH"
 # -> parallelismScore: 50, safeFunctions: ["swap"], only addLiquidity flagged hot
 ```
 
+## 2a. Claude synthesis (real API, optional)
+
+This is the only check that needs a real Anthropic API key. Put
+`ANTHROPIC_API_KEY=sk-ant-...` in the repository's `.env`, then run:
+
+```bash
+./paracheck review analyzer/static/fixtures/VulnerableSample.sol \
+  --out /tmp/paracheck-claude-review.md
+cat /tmp/paracheck-claude-review.md
+```
+
+This exercises the live `messages.parse` call and writes the review outside the
+repository. The key is optional: without it, the same command renders the raw
+findings deterministically. API billing is separate from a Claude.ai
+subscription.
+
 ## 3. Dynamic analyzer (local, no testnet needed)
 
 ```bash

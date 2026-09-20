@@ -143,6 +143,33 @@
   footer .footer-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 20px; font-size: 13px; }
   code { background: var(--chip-bg); padding: 1px 5px; border-radius: 3px; font-size: 0.92em; font-family: "IBM Plex Mono"; }
 </style>
+<style>
+  :root { --bg:#f2f0ea; --surface:#fbfaf7; --ink:#101114; --ink-muted:#5f6268; --rule:#c8c9c7; --accent:#e3311d; --good:#0b8069; --chip-bg:#e4e3de; --cobalt:#1837c7; }
+  body { background-color:var(--bg); background-image:linear-gradient(rgba(16,17,20,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(16,17,20,.045) 1px,transparent 1px); background-size:32px 32px; padding:0 28px; }
+  .wrap { max-width:1160px; }
+  .topbar { padding:20px 0; border-bottom:2px solid var(--ink); background:color-mix(in srgb,var(--bg) 92%,transparent); backdrop-filter:blur(10px); }
+  .wordmark { font-size:18px; letter-spacing:.02em; }
+  .topnav { text-transform:uppercase; letter-spacing:.06em; font-size:11px; }
+  .topnav a:hover { color:var(--accent); }
+  .hero { padding:80px 0 34px; }
+  .eyebrow { letter-spacing:.14em; font-size:11px; }
+  h1 { font-size:clamp(44px,6vw,78px); line-height:.92; letter-spacing:-.055em; max-width:760px; }
+  .hero-sub { max-width:620px; font-size:16px; line-height:1.65; }
+  section { padding:72px 0; border-top:2px solid var(--ink); }
+  .row { grid-template-columns:210px minmax(0,1fr); gap:58px; }
+  section h2 { font-size:clamp(28px,3.8vw,52px); line-height:.98; letter-spacing:-.045em; }
+  .card { border-radius:0; border:2px solid var(--ink); box-shadow:8px 8px 0 var(--accent); }
+  .grid-2 { gap:18px; }
+  .stat-grid { border-radius:0; border:2px solid var(--ink); background:var(--ink); }
+  .flag-card, .addr-chip { border-radius:0; }
+  .btn { min-height:46px; border-radius:0; text-transform:uppercase; letter-spacing:.04em; font-size:11px; }
+  button.btn { background:var(--accent); border-color:var(--accent); }
+  button.btn:hover { background:var(--ink); }
+  select, input[type="text"] { border-radius:0; min-height:44px; background:var(--surface); }
+  a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline:3px solid var(--cobalt); outline-offset:4px; }
+  @media (max-width:720px) { body { padding:0 18px; } .hero { padding:64px 0 24px; } .row { grid-template-columns:1fr; gap:18px; } section { padding:56px 0; } .card { box-shadow:5px 5px 0 var(--accent); } }
+  @media (prefers-reduced-motion:reduce) { *,*::before,*::after { transition-duration:.01ms !important; } }
+</style>
 </head>
 <body>
 <div class="wrap">
