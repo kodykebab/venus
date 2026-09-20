@@ -9,16 +9,18 @@ user is simultaneously logged in and installed - no separate connect step.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import billing
-import jobs
+import jobqueue as job_queue
 import store
+import worker
 from github_auth import (
     ConfigurationError,
     authenticated_user,
@@ -32,10 +34,23 @@ MIN_SEVERITY = os.environ.get("PARACHECK_MIN_SEVERITY", "low")
 FAIL_ON = os.environ.get("PARACHECK_FAIL_ON") or None
 CHAIN = os.environ.get("PARACHECK_CHAIN", "monad")
 
+INLINE_WORKER = os.environ.get("PARACHECK_INLINE_WORKER", "1").lower() in ("1", "true", "yes")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     store.init_db()
-    yield
+    job_queue.init_queue()
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(worker.worker_loop(stop)) if INLINE_WORKER else None
+    try:
+        yield
+    finally:
+        if task is not None:
+            # Let the in-flight job finish; whatever is unfinished stays queued.
+            stop.set()
+            await asyncio.wait_for(asyncio.shield(task), timeout=30)
 
 
 app = FastAPI(title="ParaCheck CI", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -97,7 +112,6 @@ async def setup(
 @app.post("/webhook")
 async def webhook(
     request: Request,
-    background: BackgroundTasks,
     x_github_event: str = Header(default=""),
     x_hub_signature_256: str | None = Header(default=None),
 ) -> JSONResponse:
@@ -113,9 +127,9 @@ async def webhook(
     elif x_github_event == "installation_repositories":
         _handle_installation_repositories(payload, installation_id)
     elif x_github_event == "pull_request":
-        _handle_pull_request(payload, installation_id, background)
+        _handle_pull_request(payload, installation_id)
 
-    # Always acknowledge quickly; the work happens in the background.
+    # Always acknowledge quickly; the work is queued and survives a restart.
     return JSONResponse({"ok": True})
 
 
@@ -145,7 +159,7 @@ def _handle_installation_repositories(payload: dict, installation_id: int | None
     )
 
 
-def _handle_pull_request(payload: dict, installation_id: int | None, background: BackgroundTasks) -> None:
+def _handle_pull_request(payload: dict, installation_id: int | None) -> None:
     if payload.get("action") not in ("opened", "synchronize", "reopened"):
         return
     if installation_id is None:
@@ -159,15 +173,20 @@ def _handle_pull_request(payload: dict, installation_id: int | None, background:
     if not (full_name and pr_number and head_sha):
         return
 
-    background.add_task(
-        jobs.run_review_job,
-        installation_id,
-        full_name,
-        pr_number,
-        head_sha,
-        MIN_SEVERITY,
-        FAIL_ON,
-        CHAIN,
+    # Keyed on the PR, not the commit: three pushes in a row should review the
+    # newest head once, not queue three reviews of commits nobody is waiting on.
+    job_queue.enqueue(
+        "review_pull_request",
+        {
+            "installation_id": installation_id,
+            "full_name": full_name,
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "min_severity": MIN_SEVERITY,
+            "fail_on": FAIL_ON,
+            "chain": CHAIN,
+        },
+        dedupe_key=f"review:{full_name}#{pr_number}",
     )
 
 

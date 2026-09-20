@@ -2,10 +2,12 @@
 
 Deliberately not run inside the webhook handler - GitHub wants a fast 2xx, and a
 review (dependency install + compile + Slither + an LLM call) takes real time.
-The handler acknowledges and schedules; this runs afterwards.
+The handler acknowledges and enqueues; worker.py runs this afterwards, from a
+durable queue so a restart mid-review resumes instead of dropping the check.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
@@ -160,7 +162,11 @@ async def run_review_job(
                 await checks.fail_check_run(full_name, check_run_id, token, client, reason)
                 return
 
-            ok, error = checkout_pull_request(full_name, pr_number, head_sha, token.token, workdir)
+            # git, forge/npm install and Slither are all blocking; the API
+            # process may share this loop, so they belong in a thread.
+            ok, error = await asyncio.to_thread(
+                checkout_pull_request, full_name, pr_number, head_sha, token.token, workdir
+            )
             if not ok:
                 await checks.fail_check_run(full_name, check_run_id, token, client, error)
                 return
@@ -175,7 +181,10 @@ async def run_review_job(
                 )
                 return
 
-            report = _rebase_paths(analyze_checkout(workdir, changed, min_severity, chain), workdir)
+            report = _rebase_paths(
+                await asyncio.to_thread(analyze_checkout, workdir, changed, min_severity, chain),
+                workdir,
+            )
 
             if report.get("unanalyzable"):
                 await checks.fail_check_run(

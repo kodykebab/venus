@@ -20,13 +20,18 @@ def isolated_env(monkeypatch):
     monkeypatch.setenv("PARACHECK_DB", os.path.join(tempfile.mkdtemp(), "test.db"))
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("GITHUB_APP_SLUG", "paracheck-ci")
+    # The inline worker would drain the queue (and hit the network) mid-test;
+    # these tests assert on what gets queued, worker tests drive it directly.
+    monkeypatch.setenv("PARACHECK_INLINE_WORKER", "0")
     # billing holds a module-level reference to store; leaving it cached would
     # leak the previous test's database into the next one.
-    for module in ("store", "app", "jobs", "github_auth", "billing"):
+    for module in ("store", "app", "jobs", "jobqueue", "worker", "github_auth", "billing"):
         sys.modules.pop(module, None)
+    import jobqueue
     import store
 
     store.init_db()
+    jobqueue.init_queue()
     yield
 
 
@@ -165,41 +170,135 @@ def test_repository_add_and_remove(client):
 
 # --- pull request dispatch --------------------------------------------------
 
-def test_pull_request_schedules_a_review(client, monkeypatch):
-    import app as service_app
-
-    scheduled = []
-    monkeypatch.setattr(
-        service_app.jobs, "run_review_job",
-        lambda *args, **kwargs: scheduled.append(args),
-    )
-
-    payload = {
-        "action": "opened",
+def pull_request_payload(action="opened", number=3, sha="abc123"):
+    return {
+        "action": action,
         "installation": {"id": 11},
         "repository": {"full_name": "acme/repo"},
-        "pull_request": {"number": 3, "head": {"sha": "abc123"}},
+        "pull_request": {"number": number, "head": {"sha": sha}},
     }
-    assert post_webhook(client, "pull_request", payload).status_code == 200
-    assert scheduled and scheduled[0][:4] == (11, "acme/repo", 3, "abc123")
 
 
-def test_irrelevant_pull_request_actions_are_ignored(client, monkeypatch):
-    import app as service_app
+def test_pull_request_queues_a_review(client):
+    import jobqueue
 
-    scheduled = []
-    monkeypatch.setattr(
-        service_app.jobs, "run_review_job",
-        lambda *args, **kwargs: scheduled.append(args),
-    )
-    payload = {
-        "action": "labeled",
-        "installation": {"id": 11},
-        "repository": {"full_name": "acme/repo"},
-        "pull_request": {"number": 3, "head": {"sha": "abc123"}},
-    }
-    assert post_webhook(client, "pull_request", payload).status_code == 200
-    assert scheduled == []
+    assert post_webhook(client, "pull_request", pull_request_payload()).status_code == 200
+
+    job = jobqueue.claim()
+    assert job is not None
+    assert job.kind == "review_pull_request"
+    assert job.payload["installation_id"] == 11
+    assert job.payload["full_name"] == "acme/repo"
+    assert job.payload["pr_number"] == 3
+    assert job.payload["head_sha"] == "abc123"
+
+
+def test_irrelevant_pull_request_actions_are_ignored(client):
+    import jobqueue
+
+    assert post_webhook(client, "pull_request", pull_request_payload("labeled")).status_code == 200
+    assert jobqueue.claim() is None
+
+
+def test_rapid_pushes_collapse_to_one_review_of_the_latest_head(client):
+    """Pushing three times in a row should review the newest commit once, not
+    queue three reviews of commits nobody is waiting on any more."""
+    import jobqueue
+
+    for sha in ("aaa", "bbb", "ccc"):
+        post_webhook(client, "pull_request", pull_request_payload("synchronize", sha=sha))
+
+    job = jobqueue.claim()
+    assert job.payload["head_sha"] == "ccc"
+    assert jobqueue.claim() is None
+
+
+def test_separate_pull_requests_do_not_collapse(client):
+    import jobqueue
+
+    post_webhook(client, "pull_request", pull_request_payload(number=3))
+    post_webhook(client, "pull_request", pull_request_payload(number=4))
+
+    numbers = {jobqueue.claim().payload["pr_number"], jobqueue.claim().payload["pr_number"]}
+    assert numbers == {3, 4}
+
+
+def test_a_queued_review_survives_a_restart(client):
+    """The reason this is a table and not BackgroundTasks: a redeploy between
+    the webhook and the review must not silently drop the check."""
+    import jobqueue
+
+    post_webhook(client, "pull_request", pull_request_payload())
+
+    for module in ("jobqueue", "store"):
+        sys.modules.pop(module, None)
+    import jobqueue as reloaded
+
+    assert reloaded.claim().payload["pr_number"] == 3
+
+
+# --- queue mechanics --------------------------------------------------------
+
+def test_a_crashed_worker_releases_its_job():
+    import jobqueue
+    import store
+
+    jobqueue.enqueue("review_pull_request", {"pr": 1})
+    job = jobqueue.claim()
+    assert jobqueue.claim() is None  # held by the (now dead) worker
+
+    with store.connect() as connection:
+        connection.execute("UPDATE jobs SET claimed_at = claimed_at - ?", (jobqueue.STALE_AFTER_SECONDS + 1,))
+
+    assert jobqueue.claim().id == job.id
+
+
+def test_a_failing_job_retries_then_parks():
+    import jobqueue
+    import store
+
+    jobqueue.enqueue("review_pull_request", {"pr": 1})
+    for attempt in range(1, jobqueue.MAX_ATTEMPTS + 1):
+        job = jobqueue.claim()
+        assert job is not None, f"expected a retry on attempt {attempt}"
+        jobqueue.fail(job.id, "boom", job.attempts)
+        with store.connect() as connection:
+            connection.execute("UPDATE jobs SET run_after = 0")  # skip the backoff
+
+    assert jobqueue.claim() is None
+    assert jobqueue.stats() == {"failed": 1}
+
+
+def test_an_unknown_job_kind_is_parked_not_retried():
+    import asyncio
+
+    import jobqueue
+    import worker
+
+    jobqueue.enqueue("nonsense", {})
+    asyncio.run(worker.run_job(jobqueue.claim()))
+    assert jobqueue.stats() == {"failed": 1}
+
+
+def test_the_worker_completes_a_job_and_reports_failures(monkeypatch):
+    import asyncio
+
+    import jobqueue
+    import worker
+
+    ran = []
+    monkeypatch.setitem(worker.HANDLERS, "review_pull_request", lambda **kw: ran.append(kw))
+    jobqueue.enqueue("review_pull_request", {"pr_number": 7})
+    asyncio.run(worker.run_job(jobqueue.claim()))
+    assert ran == [{"pr_number": 7}] and jobqueue.stats() == {"done": 1}
+
+    def explode(**_):
+        raise RuntimeError("slither exploded")
+
+    monkeypatch.setitem(worker.HANDLERS, "review_pull_request", explode)
+    jobqueue.enqueue("review_pull_request", {"pr_number": 8})
+    asyncio.run(worker.run_job(jobqueue.claim()))
+    assert jobqueue.stats()["pending"] == 1  # retried, not lost
 
 
 # --- dashboard --------------------------------------------------------------
