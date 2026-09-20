@@ -1,0 +1,23 @@
+# Never let a local secret or a stale build reach the image.
+.env
+.env.*
+*.keystore
+keystores/
+QUICKSTART.md
+*.db
+
+.git
+.github
+.venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+contracts/out/
+contracts/cache/
+contracts/lib/
+contracts/broadcast/
+demo-page/
+scripts/
+*.md
+!README.md

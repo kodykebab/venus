@@ -20,6 +20,7 @@ COMMANDS
   loadtest                 Fire concurrent swaps, measure real on-chain conflicts
   livetx                   Fire one live transaction against a deployed contract
   deployment-info          Write demo-page/reports/deployment.json from the latest deploy
+  doctor                   Check the toolchain and report what's missing
   config                   Print the resolved configuration and exit
   help                     Show this help
 
@@ -179,7 +180,10 @@ fi
 
 export PATH="$FOUNDRY_BIN:$SCRIPT_DIR/$PY_VENV/bin:$PATH"
 
-if [ "$1" = "review" ]; then
+if [ "$1" = "doctor" ]; then
+  shift
+  exec "$SCRIPT_DIR/$PY_VENV/bin/python3" "$SCRIPT_DIR/analyzer/static/doctor.py" "$@"
+elif [ "$1" = "review" ]; then
   shift
   exec "$SCRIPT_DIR/$PY_VENV/bin/python3" "$SCRIPT_DIR/analyzer/static/review_cli.py" "$@"
 elif [[ "$1" == *.sol ]]; then

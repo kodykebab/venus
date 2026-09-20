@@ -59,13 +59,38 @@ def test_home_points_at_the_disposable_checkout(workdir):
     assert env["TMPDIR"] == workdir
 
 
-def test_compiler_caches_survive_the_scrub(workdir, monkeypatch):
-    """Without these, forge re-downloads solc on every single review."""
-    monkeypatch.setenv("SVM_ROOT", "/opt/svm")
-    monkeypatch.setenv("SOLC_SELECT_DIR", "/opt/solc-select")
+def test_solc_select_keeps_the_variable_it_actually_reads(workdir, monkeypatch):
+    """solc-select ignores SOLC_SELECT_DIR and derives its path from VIRTUAL_ENV.
+    Scrubbing that would mean re-downloading solc on every review."""
+    monkeypatch.setenv("VIRTUAL_ENV", "/opt/venv")
+    assert sandbox.clean_environment(workdir)["VIRTUAL_ENV"] == "/opt/venv"
+
+
+def test_each_review_gets_a_private_compiler_cache(workdir, monkeypatch):
+    """A shared writable SVM_ROOT would let one repository replace a solc binary
+    that every later review then runs."""
+    shared = tempfile.mkdtemp()
+    os.makedirs(os.path.join(shared, "0.8.24"))
+    with open(os.path.join(shared, "0.8.24", "solc-0.8.24"), "w") as fh:
+        fh.write("#!/bin/sh\n")
+    monkeypatch.setenv("SVM_ROOT", shared)
+
     env = sandbox.clean_environment(workdir)
-    assert env["SVM_ROOT"] == "/opt/svm"
-    assert env["SOLC_SELECT_DIR"] == "/opt/solc-select"
+    assert env["SVM_ROOT"] != shared
+    assert env["SVM_ROOT"].startswith(workdir)
+
+    # The pre-cached compiler is still reachable, so nothing re-downloads...
+    cached = os.path.join(env["SVM_ROOT"], "0.8.24", "solc-0.8.24")
+    assert os.path.exists(cached)
+
+    # ...and a new version lands in the private copy, not the shared one.
+    os.makedirs(os.path.join(env["SVM_ROOT"], "0.8.30"))
+    assert not os.path.exists(os.path.join(shared, "0.8.30"))
+
+
+def test_a_missing_shared_cache_is_not_fatal(workdir, monkeypatch):
+    monkeypatch.setenv("SVM_ROOT", "/nonexistent/svm")
+    assert "SVM_ROOT" not in sandbox.clean_environment(workdir)
 
 
 def test_resource_limits_reach_the_child(workdir):

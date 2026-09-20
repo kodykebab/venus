@@ -31,9 +31,9 @@ import subprocess
 import sys
 
 # Everything a compiler toolchain legitimately needs, and nothing else. PATH is
-# passed through because forge/npm/solc have to be findable, and the compiler
-# cache locations are passed explicitly (SVM_ROOT, SOLC_SELECT_DIR) because HOME
-# is redirected below - without them forge would re-download solc every review.
+# passed through so forge/npm/solc are findable, and VIRTUAL_ENV because that -
+# not SOLC_SELECT_DIR, which it ignores - is how solc-select locates the
+# compilers baked into the image.
 ENV_ALLOWLIST = (
     "PATH",
     "LANG",
@@ -43,8 +43,6 @@ ENV_ALLOWLIST = (
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "SOLC_VERSION",
-    "SOLC_SELECT_DIR",
-    "SVM_ROOT",
     "VIRTUAL_ENV",
     "FOUNDRY_DISABLE_NIGHTLY_WARNING",
 )
@@ -57,6 +55,36 @@ DEFAULT_LIMITS = {
 }
 
 
+def _private_compiler_cache(home: str) -> str | None:
+    """Gives this review its own solc cache, symlinked to the shared one.
+
+    forge downloads solc on demand into $HOME/.svm - it ignores SVM_ROOT as of
+    1.8.x, which is why this creates the directory by name and exports the
+    variable too, in case a later version starts honouring it.
+
+    Pointing every review at one shared writable cache would let a repository
+    replace a compiler that every later review then executes; pointing them at a
+    read-only one breaks any repository pinning a version the image didn't
+    pre-cache. So: a private directory of symlinks into the shared cache. A
+    cached version resolves without a download, an uncached one is fetched into
+    the private copy and thrown away with the checkout.
+    """
+    shared = os.environ.get("SVM_ROOT")
+    if not shared or not os.path.isdir(shared):
+        return None
+
+    private = os.path.join(home, ".svm")
+    try:
+        os.makedirs(private, exist_ok=True)
+        for entry in os.listdir(shared):
+            link = os.path.join(private, entry)
+            if not os.path.lexists(link):
+                os.symlink(os.path.join(shared, entry), link)
+    except OSError:
+        return None
+    return private
+
+
 def clean_environment(home: str, extra: dict[str, str] | None = None) -> dict[str, str]:
     """The environment an untrusted child gets: the allowlist, plus a HOME it is
     welcome to write to.
@@ -67,6 +95,10 @@ def clean_environment(home: str, extra: dict[str, str] | None = None) -> dict[st
     env = {key: os.environ[key] for key in ENV_ALLOWLIST if key in os.environ}
     env["HOME"] = home
     env["TMPDIR"] = home
+
+    private_cache = _private_compiler_cache(home)
+    if private_cache:
+        env["SVM_ROOT"] = private_cache
     # npm phones home and writes funding/audit noise otherwise; both are network
     # calls we neither need nor want from inside a review.
     env.setdefault("NPM_CONFIG_UPDATE_NOTIFIER", "false")
