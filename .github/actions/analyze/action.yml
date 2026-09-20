@@ -6,9 +6,22 @@ description: >-
 author: "kodykebab"
 
 inputs:
+  target:
+    description: >-
+      What to review: a project directory (imports resolved, dependencies installed)
+      or a single self-contained .sol file. Defaults to the repository root.
+    required: false
+    default: "."
   contract-path:
-    description: "Path to a single, self-contained Solidity file (no imports) to review."
-    required: true
+    description: "Deprecated alias for `target`, kept for existing workflows."
+    required: false
+    default: ""
+  scope-to-changed-files:
+    description: >-
+      In a pull request, report only on the .sol files the PR touches. Analysis
+      still runs over the whole project - this scopes the output, not the input.
+    required: false
+    default: "true"
   fail-on:
     description: >-
       Fail the job if any finding is at or above this severity
@@ -58,6 +71,16 @@ runs:
       shell: bash
       run: pip install -q -r "${{ github.action_path }}/../../../analyzer/static/requirements.txt"
 
+    - name: Resolve changed files
+      id: changed
+      if: inputs.scope-to-changed-files == 'true'
+      shell: bash
+      run: echo "files=$(python3 "${{ github.action_path }}/changed_files.py")" >> "$GITHUB_OUTPUT"
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+
     - name: Run review
       id: review
       shell: bash
@@ -67,12 +90,20 @@ runs:
         SOLC_BIN="$ROOT/demo-page/api/_analyzer/solc-linux-amd64"
         chmod +x "$SOLC_BIN"
 
-        python3 "$ROOT/analyzer/static/review_cli.py" \
-          "${{ inputs.contract-path }}" \
-          --solc "$SOLC_BIN" \
-          --min-severity "${{ inputs.min-severity }}" \
-          --out "$RUNNER_TEMP/review.md" \
+        TARGET="${{ inputs.contract-path }}"
+        if [ -z "$TARGET" ]; then TARGET="${{ inputs.target }}"; fi
+
+        ARGS=(
+          "$TARGET"
+          --solc "$SOLC_BIN"
+          --min-severity "${{ inputs.min-severity }}"
+          --out "$RUNNER_TEMP/review.md"
           --json-out "$RUNNER_TEMP/report.json"
+        )
+        CHANGED="${{ steps.changed.outputs.files }}"
+        if [ -n "$CHANGED" ]; then ARGS+=(--changed-files "$CHANGED"); fi
+
+        python3 "$ROOT/analyzer/static/review_cli.py" "${ARGS[@]}"
 
         cat "$RUNNER_TEMP/review.md"
         {

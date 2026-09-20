@@ -7,7 +7,7 @@ name: ParaCheck Review (sample contract)
 on:
   pull_request:
     paths:
-      - "contracts/samples/StakingPoolSample.sol"
+      - "contracts/**"
       - "analyzer/static/**"
       - ".github/actions/analyze/**"
       - ".github/workflows/paracheck-analyze.yml"
@@ -25,8 +25,11 @@ jobs:
 
       - uses: ./.github/actions/analyze
         with:
-          contract-path: contracts/samples/StakingPoolSample.sol
-          min-severity: low
+          # A project directory, not a single file: imports get resolved and
+          # dependencies installed, and in a PR the output is scoped to the
+          # .sol files that PR actually touches.
+          target: contracts
+          min-severity: medium
           # Report-only for this example. Set fail-on: high to block PRs that
           # introduce a high-severity finding.
           fail-on: ""

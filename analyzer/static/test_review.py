@@ -94,3 +94,46 @@ def test_llm_layer_degrades_without_credentials(monkeypatch):
     # No key must be a soft failure - CI still gets a review from raw findings.
     assert synthesize.synthesize_review(review_file(STAKING)) is None
     assert synthesize.synthesize_review({"unanalyzable": True}) is None
+
+
+# --- project mode -----------------------------------------------------------
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CONTRACTS_PROJECT = os.path.join(REPO_ROOT, "contracts")
+
+
+def test_detects_the_build_system():
+    from project import detect_project
+
+    foundry = detect_project(CONTRACTS_PROJECT)
+    assert foundry.framework == "foundry"
+    assert foundry.source_dir == "src"
+    assert foundry.is_installable
+
+    assert detect_project(FIXTURES).framework == "plain"
+
+
+def test_project_review_resolves_imports_and_skips_dependencies():
+    from review import review_project
+
+    report = review_project(CONTRACTS_PROJECT)
+    assert report["unanalyzable"] is False
+    assert report["project"]["framework"] == "foundry"
+
+    names = {c["contract"] for c in report["contracts"]}
+    # First-party contracts - these import ./interfaces/*, which the single-file
+    # path cannot resolve at all.
+    assert {"NaiveAMM", "ShardedAMM", "DemoToken"} <= names
+    # forge-std compiles alongside them and must not be reviewed.
+    assert not any(n.startswith("Std") or n == "Vm" for n in names)
+    assert all("lib/" not in (f["file"] or "") for f in report["findings"])
+
+
+def test_project_review_scopes_output_to_changed_files():
+    from review import review_project
+
+    scoped = review_project(CONTRACTS_PROJECT, changed_files=["contracts/src/NaiveAMM.sol"])
+    assert {c["contract"] for c in scoped["contracts"]} == {"NaiveAMM"}
+    assert {f["file"] for f in scoped["findings"]} == {"contracts/src/NaiveAMM.sol"}
+    # Whole-project analysis still ran - NaiveAMM's score reflects its full contract.
+    assert scoped["contracts"][0]["parallelismScore"] == 0

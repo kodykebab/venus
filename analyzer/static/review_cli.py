@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "llm"))
 
 from render import render_markdown  # noqa: E402
-from review import review_file  # noqa: E402
+from review import review_file, review_project  # noqa: E402
 from schema import at_least  # noqa: E402
 
 
@@ -36,9 +36,13 @@ def build_output(report: dict, target: str, use_llm: bool, diff: str | None, sou
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source_file")
+    parser.add_argument("target", help="a .sol file, or a project directory to review whole")
     parser.add_argument("--solc", default=None, help="explicit solc binary path")
     parser.add_argument("--diff", default=None, help="path to a unified diff for change-scoped review")
+    parser.add_argument("--changed-files", default=None,
+                        help="comma-separated paths; scopes a project review to a PR's files")
+    parser.add_argument("--no-install", action="store_true",
+                        help="skip dependency installation in project mode")
     parser.add_argument("--min-severity", default="info", help="drop findings below this severity")
     parser.add_argument("--fail-on", default=None, help="exit 1 if any finding is at or above this severity")
     parser.add_argument("--json", action="store_true", help="emit the raw report as JSON")
@@ -47,7 +51,16 @@ def main() -> None:
     parser.add_argument("--json-out", default=None, help="also write the raw report JSON here")
     args = parser.parse_args()
 
-    report = review_file(args.source_file, solc=args.solc, min_severity=args.min_severity)
+    if os.path.isdir(args.target):
+        changed = [p.strip() for p in (args.changed_files or "").split(",") if p.strip()]
+        report = review_project(
+            args.target,
+            changed_files=changed or None,
+            min_severity=args.min_severity,
+            install=not args.no_install,
+        )
+    else:
+        report = review_file(args.target, solc=args.solc, min_severity=args.min_severity)
 
     if args.json:
         output = json.dumps(report, indent=2)
@@ -57,10 +70,10 @@ def main() -> None:
             with open(args.diff, encoding="utf-8") as fh:
                 diff = fh.read()
         source = None
-        if os.path.exists(args.source_file):
-            with open(args.source_file, encoding="utf-8") as fh:
+        if os.path.isfile(args.target):
+            with open(args.target, encoding="utf-8") as fh:
                 source = fh.read()
-        output = build_output(report, args.source_file, not args.no_llm, diff, source)
+        output = build_output(report, args.target, not args.no_llm, diff, source)
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
