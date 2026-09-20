@@ -303,6 +303,14 @@ def test_the_worker_completes_a_job_and_reports_failures(monkeypatch):
 
 # --- dashboard --------------------------------------------------------------
 
+def signed_in_for(client, installation_id: int):
+    """The cookie the setup callback issues, without going through GitHub."""
+    import sessions
+
+    client.cookies.set(sessions.COOKIE_NAME, sessions.issue([installation_id]))
+    return client
+
+
 def test_dashboard_shows_repositories_and_quota(client):
     import store
 
@@ -310,10 +318,115 @@ def test_dashboard_shows_repositories_and_quota(client):
     store.set_repositories(12, ["acme/repo"])
     store.record_review(12, "acme/repo", 5, "sha", "comment", 2)
 
-    body = client.get("/dashboard?installation_id=12").text
+    body = signed_in_for(client, 12).get("/dashboard?installation_id=12").text
     assert "acme/repo" in body
     assert "reviews left" in body
     assert "comment" in body
+
+
+def test_setup_signs_the_browser_in_for_that_installation(client):
+    """The setup callback is the only moment we know who the browser is, so it
+    has to be the moment the session is issued."""
+    import store
+
+    response = client.get(
+        f"/setup?installation_id=77&state={store.issue_state()}", follow_redirects=False
+    )
+    assert response.status_code == 302
+
+    import sessions
+
+    assert 77 in sessions.read(response.cookies.get(sessions.COOKIE_NAME))
+
+    cookie = client.cookies.get(sessions.COOKIE_NAME)
+    assert cookie, "the browser should now hold a session cookie"
+    assert client.get("/dashboard?installation_id=77").status_code == 200
+    assert client.get("/dashboard?installation_id=78").status_code == 403
+
+
+# --- access control -----------------------------------------------------------
+
+def test_another_installations_dashboard_is_refused(client):
+    """Installation ids are small sequential integers. Without a session check
+    the dashboard is a directory of other people's repositories."""
+    import store
+
+    store.upsert_installation(31, "victim", "Organization")
+    store.set_repositories(31, ["victim/secret-protocol"])
+
+    response = signed_in_for(client, 99).get("/dashboard?installation_id=31")
+    assert response.status_code == 403
+    assert "victim/secret-protocol" not in response.text
+
+
+def test_the_dashboard_needs_a_session_at_all(client):
+    import store
+
+    store.upsert_installation(32, "victim", "User")
+    store.set_repositories(32, ["victim/secret-protocol"])
+
+    response = client.get("/dashboard?installation_id=32")
+    assert response.status_code == 403
+    assert "victim/secret-protocol" not in response.text
+
+
+def test_a_refusal_does_not_reveal_whether_the_installation_exists(client):
+    import store
+
+    store.upsert_installation(33, "victim", "User")
+    real = client.get("/dashboard?installation_id=33")
+    absent = client.get("/dashboard?installation_id=999999")
+    assert real.status_code == absent.status_code == 403
+    assert real.text == absent.text
+
+
+def test_a_tampered_cookie_grants_nothing(client):
+    import sessions
+
+    token = sessions.issue([31])
+    payload, _, signature = token.partition(".")
+    forged = sessions.issue([31]).replace(payload, sessions.issue([32]).partition(".")[0])
+
+    client.cookies.set(sessions.COOKIE_NAME, forged)
+    assert client.get("/dashboard?installation_id=32").status_code == 403
+
+    client.cookies.set(sessions.COOKIE_NAME, f"{payload}.{signature[:-4]}AAAA")
+    assert client.get("/dashboard?installation_id=31").status_code == 403
+
+
+def test_a_cookie_signed_with_another_secret_grants_nothing(client, monkeypatch):
+    """A deployment's cookies must not be valid on another deployment."""
+    import sessions
+
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "somebody-elses-secret")
+    forged = sessions.issue([31])
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+
+    client.cookies.set(sessions.COOKIE_NAME, forged)
+    assert client.get("/dashboard?installation_id=31").status_code == 403
+
+
+def test_an_expired_session_grants_nothing(client, monkeypatch):
+    import sessions
+
+    token = sessions.issue([31])
+    monkeypatch.setattr(sessions.time, "time", lambda: 10**9 + sessions.MAX_AGE_SECONDS + 10**9)
+    assert sessions.read(token) == []
+
+
+def test_installing_a_second_time_keeps_access_to_the_first(client):
+    import sessions
+
+    first = sessions.issue([41])
+    both = sessions.grant(first, 42)
+    assert sorted(sessions.read(both)) == [41, 42]
+
+
+def test_billing_upgrade_refuses_another_installation(client):
+    response = signed_in_for(client, 50).get(
+        "/billing/upgrade?installation_id=51", follow_redirects=False
+    )
+    assert response.status_code == 403
 
 
 # --- billing ----------------------------------------------------------------
@@ -355,7 +468,9 @@ def test_billing_webhook_upgrades_the_installation(client, monkeypatch):
 def test_upgrade_is_honest_when_billing_is_unconfigured(client, monkeypatch):
     monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
     monkeypatch.delenv("STRIPE_PRICE_ID", raising=False)
-    response = client.get("/billing/upgrade?installation_id=1", follow_redirects=False)
+    response = signed_in_for(client, 1).get(
+        "/billing/upgrade?installation_id=1", follow_redirects=False
+    )
     assert response.status_code == 503
     assert "trial-only mode" in response.text
 

@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import billing
 import dashboard as pages
 import jobqueue as job_queue
+import sessions
 import store
 import ui
 import worker
@@ -75,6 +76,7 @@ def install() -> RedirectResponse:
 
 @app.get("/setup")
 async def setup(
+    request: Request,
     installation_id: int | None = None,
     setup_action: str | None = None,
     code: str | None = None,
@@ -108,7 +110,15 @@ async def setup(
             pass
 
     store.upsert_installation(installation_id, login, account_type)
-    return RedirectResponse(f"/dashboard?installation_id={installation_id}", status_code=302)
+
+    # This is the only moment we know who the browser belongs to: GitHub has
+    # just sent them back from a verified install. The cookie issued here is
+    # what the dashboard checks from then on.
+    response = RedirectResponse(f"/dashboard?installation_id={installation_id}", status_code=302)
+    sessions.set_cookie(
+        response, sessions.grant(request.cookies.get(sessions.COOKIE_NAME), installation_id)
+    )
+    return response
 
 
 @app.post("/webhook")
@@ -194,6 +204,9 @@ def _handle_pull_request(payload: dict, installation_id: int | None) -> None:
 
 @app.get("/billing/upgrade")
 async def billing_upgrade(installation_id: int, request: Request):
+    if not _may_view(request, installation_id):
+        return HTMLResponse(pages.not_your_installation(), status_code=403)
+
     """Sends the user to Stripe Checkout. Only reachable after install - the
     trial is what keeps signup itself card-free."""
     base = PUBLIC_URL or str(request.base_url).rstrip("/")
@@ -225,9 +238,14 @@ def landing() -> HTMLResponse:
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(installation_id: int | None = None) -> HTMLResponse:
+def dashboard(request: Request, installation_id: int | None = None) -> HTMLResponse:
     if installation_id is None:
         return HTMLResponse(pages.no_installation(), status_code=400)
+
+    # Installation ids are small sequential integers, so without this the
+    # dashboard is a directory of other people's repositories.
+    if not _may_view(request, installation_id):
+        return HTMLResponse(pages.not_your_installation(), status_code=403)
 
     installation = store.get_installation(installation_id)
     if installation is None:
@@ -246,6 +264,10 @@ def dashboard(installation_id: int | None = None) -> HTMLResponse:
         queue=queue,
         settings=_settings(),
     ))
+
+
+def _may_view(request: Request, installation_id: int) -> bool:
+    return installation_id in sessions.read(request.cookies.get(sessions.COOKIE_NAME))
 
 
 def _settings() -> dict:

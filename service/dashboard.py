@@ -104,6 +104,19 @@ def unknown_installation() -> str:
         </div></div>"""), nav='<a class="btn" href="/install">Add to GitHub</a>')
 
 
+def not_your_installation() -> str:
+    """Deliberately does not say whether that installation exists - the id is
+    guessable, and confirming one would be its own small leak."""
+    return ui.page("ParaCheck", ui.section("Not signed in for this installation", """
+        <div class="card"><div class="empty">
+          <p style="margin-top:0">This browser hasn't been shown to have access to that
+          installation.</p>
+          <p class="small" style="margin-bottom:0">Open the dashboard from GitHub -
+          <a href="https://github.com/settings/installations">your installations</a> -
+          and follow the app's link, or <a href="/install">install ParaCheck</a>.</p>
+        </div></div>"""), nav='<a class="btn" href="/install">Add to GitHub</a>')
+
+
 def billing_unconfigured() -> str:
     return ui.page("ParaCheck", ui.section("Subscriptions aren't enabled here", """
         <div class="card card-pad">
