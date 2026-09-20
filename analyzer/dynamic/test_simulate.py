@@ -89,3 +89,59 @@ def test_confirmed_findings_name_the_variable():
     assert finding.check == "hot-slot-confirmed"
     assert "totalStaked" in finding.title
     assert finding.lines == [18], "must point at the declaration for inline annotation"
+
+
+# --- spec validation --------------------------------------------------------
+#
+# A simulation spec arrives in the repository under review, so it is hostile
+# input. There's no shell involved (every subprocess takes an argv list), but a
+# value starting with "-" would be read by `cast` as an option rather than a
+# positional - which would let a repo point `cast send` at an RPC and key of its
+# choosing. These cases must stay blocked.
+
+import pytest as _pytest  # noqa: E402
+
+from simulate import SpecValidationError  # noqa: E402
+
+
+@_pytest.mark.parametrize(
+    "description,spec",
+    [
+        ("signature is an option", {"contract": "A", "concurrent": {"signature": "--rpc-url"}}),
+        ("argument is an option",
+         {"contract": "A", "concurrent": {"signature": "go(uint256)", "args": ["--private-key"]}}),
+        ("contract name is an option", {"contract": "--help", "concurrent": {"signature": "go()"}}),
+        ("signature carries a payload",
+         {"contract": "A", "concurrent": {"signature": "go(); rm -rf /"}}),
+        ("fork url reads a local file",
+         {"contract": "A", "concurrent": {"signature": "go()"}, "forkUrl": "file:///etc/passwd"}),
+        ("fork url is an option",
+         {"contract": "A", "concurrent": {"signature": "go()"}, "forkUrl": "--foo"}),
+        ("sender count is unbounded",
+         {"contract": "A", "concurrent": {"signature": "go()"}, "senders": 9999}),
+        ("value smuggles an option",
+         {"contract": "A", "concurrent": {"signature": "go()", "value": "1 --x"}}),
+    ],
+)
+def test_hostile_specs_are_rejected(description, spec):
+    with _pytest.raises(SpecValidationError):
+        SimulationSpec.from_dict(spec)
+
+
+def test_a_legitimate_spec_still_parses():
+    spec = SimulationSpec.from_dict({
+        "contract": "StakingPoolSample",
+        "concurrent": {"signature": "stake()", "value": "1000000000000000000"},
+        "senders": 5,
+    })
+    assert spec.contract == "StakingPoolSample"
+    assert spec.senders == 5
+
+
+def test_rejected_spec_surfaces_as_a_reason_not_a_crash():
+    from simulate import simulate as run
+
+    # Spec validation happens at construction, so callers building one from
+    # untrusted JSON get an exception; simulate() itself never leaks a traceback.
+    result = run(STAKING, SimulationSpec(contract="Nope", concurrent=Call("stake()")))
+    assert result["ran"] is False and "reason" in result

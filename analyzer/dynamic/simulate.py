@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -38,6 +39,62 @@ ANVIL_ACCOUNTS = [
 
 STARTUP_TIMEOUT_SECONDS = 30
 COMMAND_TIMEOUT_SECONDS = 120
+
+# A simulation spec is repository-controlled: it arrives in the code under
+# review. Nothing from it reaches `cast` unvalidated.
+#
+# There is no shell here - every subprocess takes an argv list - so shell
+# metacharacters are inert. The real risk is *argument* injection: a value
+# beginning with "-" would be parsed by cast as an option rather than a
+# positional, letting a hostile repo point `cast send` at an arbitrary RPC with
+# an arbitrary key. Hence the leading-dash rejection below, which is the load-
+# bearing check; the format rules just keep errors legible.
+_SIGNATURE_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*\([A-Za-z0-9_,\[\]\s]*\)$")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_ARG_RE = re.compile(r"^(0x[0-9a-fA-F]*|-?[0-9]+|true|false|\[[^\]]*\])$")
+MAX_SENDERS = len(ANVIL_ACCOUNTS) if False else 8  # bounded by the unlocked dev accounts
+
+
+class SpecValidationError(ValueError):
+    """The simulation spec contains something we won't pass to a subprocess."""
+
+
+def _reject_option_like(value: str, field: str) -> str:
+    if value.startswith("-"):
+        raise SpecValidationError(
+            f"{field} may not begin with '-' (would be read as a command-line option): {value!r}"
+        )
+    return value
+
+
+def _validate_signature(signature: str) -> str:
+    _reject_option_like(signature, "signature")
+    if not _SIGNATURE_RE.match(signature):
+        raise SpecValidationError(f"not a valid function signature: {signature!r}")
+    return signature
+
+
+def _validate_arg(value: str) -> str:
+    _reject_option_like(value, "argument")
+    if not _ARG_RE.match(value):
+        raise SpecValidationError(
+            f"argument must be hex, an integer, a boolean, or an array literal: {value!r}"
+        )
+    return value
+
+
+def _validate_amount(value: str, field: str) -> str:
+    _reject_option_like(value, field)
+    if not re.match(r"^[0-9]+$", value):
+        raise SpecValidationError(f"{field} must be a decimal wei amount: {value!r}")
+    return value
+
+
+def _validate_identifier(value: str, field: str) -> str:
+    _reject_option_like(value, field)
+    if not _IDENTIFIER_RE.match(value):
+        raise SpecValidationError(f"{field} must be a Solidity identifier: {value!r}")
+    return value
 
 
 @dataclass
@@ -68,20 +125,35 @@ class SimulationSpec:
     def from_dict(cls, data: dict) -> "SimulationSpec":
         def call(entry: dict) -> Call:
             return Call(
-                signature=entry["signature"],
-                args=[str(a) for a in entry.get("args", [])],
-                value=str(entry.get("value", "0")),
+                signature=_validate_signature(str(entry["signature"])),
+                args=[_validate_arg(str(a)) for a in entry.get("args", [])],
+                value=_validate_amount(str(entry.get("value", "0")), "value"),
             )
 
+        fork_url = data.get("forkUrl")
+        if fork_url is not None:
+            fork_url = str(fork_url)
+            _reject_option_like(fork_url, "forkUrl")
+            if not fork_url.startswith(("http://", "https://")):
+                raise SpecValidationError(f"forkUrl must be an http(s) URL: {fork_url!r}")
+
+        senders = int(data.get("senders", 5))
+        if not 1 <= senders <= MAX_SENDERS:
+            raise SpecValidationError(f"senders must be between 1 and {MAX_SENDERS}")
+
+        gas_limit = int(data.get("gasLimit", 1_500_000))
+        if not 21_000 <= gas_limit <= 30_000_000:
+            raise SpecValidationError("gasLimit must be between 21000 and 30000000")
+
         return cls(
-            contract=data["contract"],
-            constructor_args=[str(a) for a in data.get("constructorArgs", [])],
-            constructor_value=str(data.get("constructorValue", "0")),
+            contract=_validate_identifier(str(data["contract"]), "contract"),
+            constructor_args=[_validate_arg(str(a)) for a in data.get("constructorArgs", [])],
+            constructor_value=_validate_amount(str(data.get("constructorValue", "0")), "constructorValue"),
             setup=[call(e) for e in data.get("setup", [])],
             concurrent=call(data["concurrent"]) if data.get("concurrent") else None,
-            senders=int(data.get("senders", 5)),
-            fork_url=data.get("forkUrl"),
-            gas_limit=int(data.get("gasLimit", 1_500_000)),
+            senders=senders,
+            fork_url=fork_url,
+            gas_limit=gas_limit,
         )
 
 
@@ -278,6 +350,8 @@ def simulate(source_file: str, spec: SimulationSpec, solc: str | None = None) ->
             "forked": bool(spec.fork_url),
             **measurement,
         }
+    except SpecValidationError as exc:
+        return {"ran": False, "reason": f"rejected simulation spec: {exc}"}
     except SimulationError as exc:
         return {"ran": False, "reason": str(exc)}
     except subprocess.TimeoutExpired:
