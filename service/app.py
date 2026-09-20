@@ -29,6 +29,7 @@ APP_SLUG = os.environ.get("GITHUB_APP_SLUG", "paracheck-ci")
 PUBLIC_URL = os.environ.get("PARACHECK_PUBLIC_URL", "")
 MIN_SEVERITY = os.environ.get("PARACHECK_MIN_SEVERITY", "low")
 FAIL_ON = os.environ.get("PARACHECK_FAIL_ON") or None
+CHAIN = os.environ.get("PARACHECK_CHAIN", "monad")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -165,6 +166,7 @@ def _handle_pull_request(payload: dict, installation_id: int | None, background:
         head_sha,
         MIN_SEVERITY,
         FAIL_ON,
+        CHAIN,
     )
 
 

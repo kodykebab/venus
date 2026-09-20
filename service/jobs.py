@@ -102,7 +102,12 @@ async def changed_solidity_files(
     return files
 
 
-def analyze_checkout(workdir: str, changed_files: list[str], min_severity: str = "low") -> dict:
+def analyze_checkout(
+    workdir: str,
+    changed_files: list[str],
+    min_severity: str = "low",
+    chain: str | None = None,
+) -> dict:
     from review import review_project
 
     return review_project(
@@ -110,6 +115,7 @@ def analyze_checkout(workdir: str, changed_files: list[str], min_severity: str =
         changed_files=changed_files or None,
         min_severity=min_severity,
         install=True,
+        chain=chain,
     )
 
 
@@ -130,6 +136,7 @@ async def run_review_job(
     head_sha: str,
     min_severity: str = "low",
     fail_on: str | None = None,
+    chain: str | None = None,
 ) -> None:
     """End to end: token -> checkout -> analyze -> check run. Any failure is
     reported as a completed check explaining itself, never a silent no-op."""
@@ -168,7 +175,7 @@ async def run_review_job(
                 )
                 return
 
-            report = _rebase_paths(analyze_checkout(workdir, changed, min_severity), workdir)
+            report = _rebase_paths(analyze_checkout(workdir, changed, min_severity, chain), workdir)
 
             if report.get("unanalyzable"):
                 await checks.fail_check_run(

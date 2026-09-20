@@ -29,6 +29,13 @@ def render_markdown(report: dict, target: str = "", title: str = "ParaCheck revi
         lines.append(f"⚠️ **Unanalyzable**: {report.get('reason', 'unknown reason')}")
         return "\n".join(lines)
 
+    chain = report.get("chain") or {}
+    if chain:
+        note = "" if chain.get("parallelismAnalysisRan") else \
+            " — sequential execution, so parallelism analysis was skipped"
+        lines.append(f"_Target chain: **{chain.get('name', 'unknown')}**{note}._")
+        lines.append("")
+
     summary = report.get("summary") or {}
     counts = summary.get("bySeverity") or {}
     if counts:
@@ -40,8 +47,14 @@ def render_markdown(report: dict, target: str = "", title: str = "ParaCheck revi
 
     for contract in report.get("contracts", []):
         score = contract.get("parallelismScore")
-        badge = _score_badge(score)
-        lines.append(f"**{contract['contract']}** — {badge} parallelism score **{score}**/100")
+        if score is None:
+            # Parallelism analysis didn't run for this chain, so "safe under
+            # concurrency" would be claiming something we didn't check.
+            lines.append(f"**{contract['contract']}**")
+            continue
+        lines.append(
+            f"**{contract['contract']}** — {_score_badge(score)} parallelism score **{score}**/100"
+        )
         safe = contract.get("safeFunctions") or []
         if safe:
             lines.append(f"- Safe under concurrency: {', '.join(f'`{fn}()`' for fn in safe)}")

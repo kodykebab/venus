@@ -38,6 +38,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target", help="a .sol file, or a project directory to review whole")
     parser.add_argument("--solc", default=None, help="explicit solc binary path")
+    parser.add_argument("--chain", default=None,
+                        help="target chain key or id (monad, ethereum, 10143, ...). "
+                             "Parallelism analysis only runs on parallel-execution chains.")
     parser.add_argument("--diff", default=None, help="path to a unified diff for change-scoped review")
     parser.add_argument("--changed-files", default=None,
                         help="comma-separated paths; scopes a project review to a PR's files")
@@ -58,9 +61,12 @@ def main() -> None:
             changed_files=changed or None,
             min_severity=args.min_severity,
             install=not args.no_install,
+            chain=args.chain,
         )
     else:
-        report = review_file(args.target, solc=args.solc, min_severity=args.min_severity)
+        report = review_file(
+            args.target, solc=args.solc, min_severity=args.min_severity, chain=args.chain
+        )
 
     if args.json:
         output = json.dumps(report, indent=2)

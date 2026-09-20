@@ -137,3 +137,47 @@ def test_project_review_scopes_output_to_changed_files():
     assert {f["file"] for f in scoped["findings"]} == {"contracts/src/NaiveAMM.sol"}
     # Whole-project analysis still ran - NaiveAMM's score reflects its full contract.
     assert scoped["contracts"][0]["parallelismScore"] == 0
+
+
+# --- multi-chain ------------------------------------------------------------
+
+def test_chain_resolution_by_key_and_id():
+    from chains import resolve_chain
+
+    assert resolve_chain("monad").parallel_execution is True
+    assert resolve_chain(10143).name == "Monad Testnet"
+    assert resolve_chain("ethereum").parallel_execution is False
+    assert resolve_chain(1).key == "ethereum"
+    # An unknown chain must not claim an execution model it doesn't know.
+    assert resolve_chain("some-new-l2").parallel_execution is False
+    assert resolve_chain(None).key == "monad", "defaults to Monad"
+
+
+def test_parallelism_only_runs_on_parallel_chains():
+    on_monad = review_file(VULNERABLE, chain="monad")
+    on_ethereum = review_file(VULNERABLE, chain="ethereum")
+
+    assert on_monad["chain"]["parallelismAnalysisRan"] is True
+    assert any(f["check"] == "hot-slot" for f in on_monad["findings"])
+    assert on_monad["contracts"][0]["parallelismScore"] is not None
+
+    # Contended slots are meaningless where execution is sequential - reporting
+    # them would be noise dressed up as a finding.
+    assert on_ethereum["chain"]["parallelismAnalysisRan"] is False
+    assert not any(f["check"] == "hot-slot" for f in on_ethereum["findings"])
+    assert on_ethereum["contracts"][0]["parallelismScore"] is None
+
+
+def test_universal_checks_run_on_every_chain():
+    monad_checks = {f["check"] for f in review_file(VULNERABLE, chain="monad")["findings"]}
+    eth_checks = {f["check"] for f in review_file(VULNERABLE, chain="ethereum")["findings"]}
+    # Everything Slither finds is execution-model independent.
+    assert "arbitrary-send-eth" in monad_checks and "arbitrary-send-eth" in eth_checks
+    assert monad_checks - eth_checks == {"hot-slot"}
+
+
+def test_render_explains_a_skipped_parallelism_pass():
+    rendered = render_markdown(review_file(VULNERABLE, chain="ethereum"), "x.sol")
+    assert "Ethereum" in rendered
+    assert "parallelism analysis was skipped" in rendered
+    assert "Safe under concurrency" not in rendered

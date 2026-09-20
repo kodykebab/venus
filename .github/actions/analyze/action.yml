@@ -34,6 +34,13 @@ inputs:
       (0-100). Empty means never fail.
     required: false
     default: ""
+  chain:
+    description: >-
+      Target chain key or id (monad, sei, ethereum, base, 10143, ...). Parallelism
+      analysis only runs on chains with optimistic parallel execution; everything
+      else is checked on every chain.
+    required: false
+    default: "monad"
   min-severity:
     description: "Drop findings below this severity from the review entirely."
     required: false
@@ -97,6 +104,7 @@ runs:
           "$TARGET"
           --solc "$SOLC_BIN"
           --min-severity "${{ inputs.min-severity }}"
+          --chain "${{ inputs.chain }}"
           --out "$RUNNER_TEMP/review.md"
           --json-out "$RUNNER_TEMP/report.json"
         )

@@ -13,6 +13,7 @@ import os
 
 from slither import Slither
 
+from chains import Chain, resolve_chain
 from classify import classify
 from detectors import run_detectors
 from project import detect_project, install_dependencies
@@ -47,7 +48,7 @@ def _source_file_of(contract) -> str | None:
     return mapping.filename.relative or mapping.filename.short
 
 
-def _parallelism_findings(contract, flags: list[dict]) -> list[Finding]:
+def _parallelism_findings(contract, flags: list[dict], chain: Chain) -> list[Finding]:
     findings = []
     for flag in flags:
         touched = ", ".join(flag["touchedBy"])
@@ -60,8 +61,8 @@ def _parallelism_findings(contract, flags: list[dict]) -> list[Finding]:
                 title=f"`{flag['slot']}` is a contended storage slot (touched by {touched})",
                 description=(
                     f"Every concurrent call to {touched} writes the same storage slot "
-                    f"`{flag['slot']}`. Under optimistic parallel execution these "
-                    f"transactions conflict and get re-executed serially, so the "
+                    f"`{flag['slot']}`. Under {chain.name}'s optimistic parallel execution "
+                    f"these transactions conflict and get re-executed serially, so the "
                     f"contract loses the throughput the chain is built to provide."
                 ),
                 contract=contract.name,
@@ -73,9 +74,15 @@ def _parallelism_findings(contract, flags: list[dict]) -> list[Finding]:
     return findings
 
 
-def review_file(source_file: str, solc: str | None = None, min_severity: str = "info") -> dict:
+def review_file(
+    source_file: str,
+    solc: str | None = None,
+    min_severity: str = "info",
+    chain: str | int | None = None,
+) -> dict:
     """Full static review of one self-contained Solidity file. Never raises - every
     failure mode comes back as `unanalyzable: true` with a reason."""
+    target_chain = resolve_chain(chain)
     try:
         slither = load_slither(source_file, solc=solc)
     except UnanalyzableContract as exc:
@@ -106,13 +113,14 @@ def review_file(source_file: str, solc: str | None = None, min_severity: str = "
         reports.append(
             {
                 "contract": contract.name,
-                "parallelismScore": score,
-                "flags": flags,
+                "parallelismScore": score if target_chain.runs_parallelism_analysis else None,
+                "flags": flags if target_chain.runs_parallelism_analysis else [],
                 "safeFunctions": safe_functions,
                 "unanalyzable": False,
             }
         )
-        findings.extend(_parallelism_findings(contract, flags))
+        if target_chain.runs_parallelism_analysis:
+            findings.extend(_parallelism_findings(contract, flags, target_chain))
 
     # Detectors run once for the whole compilation unit, not per contract.
     findings.extend(run_detectors(slither))
@@ -129,15 +137,28 @@ def review_file(source_file: str, solc: str | None = None, min_severity: str = "
     for finding in findings:
         counts[finding.severity] = counts.get(finding.severity, 0) + 1
 
+    scores = [r["parallelismScore"] for r in reports if r["parallelismScore"] is not None]
     return {
         "unanalyzable": False,
+        "chain": _chain_summary(target_chain),
         "contracts": reports,
         "findings": [f.to_dict() for f in findings],
         "summary": {
             "totalFindings": len(findings),
             "bySeverity": counts,
-            "lowestParallelismScore": min((r["parallelismScore"] for r in reports), default=None),
+            "lowestParallelismScore": min(scores, default=None),
         },
+    }
+
+
+def _chain_summary(chain: Chain) -> dict:
+    return {
+        "key": chain.key,
+        "name": chain.name,
+        "chainId": chain.chain_id,
+        "parallelExecution": chain.parallel_execution,
+        "parallelismAnalysisRan": chain.runs_parallelism_analysis,
+        "notes": chain.notes,
     }
 
 
@@ -187,12 +208,14 @@ def review_project(
     changed_files: list[str] | None = None,
     min_severity: str = "info",
     install: bool = True,
+    chain: str | int | None = None,
 ) -> dict:
     """Reviews a real multi-file project - resolves imports, unlike review_file.
 
     `changed_files` scopes the *output* to a pull request's files. Analysis still
     runs over the whole project, because whether a slot is contended is a property
     of the entire contract, not of the lines a diff happens to touch."""
+    target_chain = resolve_chain(chain)
     project = detect_project(root)
 
     if install and project.is_installable:
@@ -236,13 +259,14 @@ def review_project(
             {
                 "contract": contract.name,
                 "file": _source_file_of(contract),
-                "parallelismScore": score,
-                "flags": flags,
+                "parallelismScore": score if target_chain.runs_parallelism_analysis else None,
+                "flags": flags if target_chain.runs_parallelism_analysis else [],
                 "safeFunctions": safe_functions,
                 "unanalyzable": False,
             }
         )
-        findings.extend(_parallelism_findings(contract, flags))
+        if target_chain.runs_parallelism_analysis:
+            findings.extend(_parallelism_findings(contract, flags, target_chain))
 
     findings.extend(run_detectors(slither))
 
@@ -267,15 +291,17 @@ def review_project(
     for finding in findings:
         counts[finding.severity] = counts.get(finding.severity, 0) + 1
 
+    scores = [r["parallelismScore"] for r in reports if r["parallelismScore"] is not None]
     return {
         "unanalyzable": False,
+        "chain": _chain_summary(target_chain),
         "project": {"framework": project.framework, "root": project.root},
         "contracts": reports,
         "findings": [f.to_dict() for f in findings],
         "summary": {
             "totalFindings": len(findings),
             "bySeverity": counts,
-            "lowestParallelismScore": min((r["parallelismScore"] for r in reports), default=None),
+            "lowestParallelismScore": min(scores, default=None),
             "contractsReviewed": len(reports),
         },
     }
