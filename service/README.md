@@ -54,6 +54,10 @@ cp service/.env.example service/.env   # then fill it in
 | `PARACHECK_DB` | no | SQLite path (default `paracheck.db`) |
 | `PARACHECK_MIN_SEVERITY` | no | Drop findings below this (default `low`) |
 | `PARACHECK_FAIL_ON` | no | Fail the check at or above this severity |
+| `PARACHECK_CHAIN` | no | Target chain (default `monad`); gates parallelism analysis |
+| `STRIPE_SECRET_KEY` | no | Enables subscriptions; unset means trial-only mode |
+| `STRIPE_PRICE_ID` | no | The recurring price to check out |
+| `STRIPE_WEBHOOK_SECRET` | no | Verifies Stripe webhooks |
 
 \* one of the two key variables.
 
@@ -84,6 +88,21 @@ Send a user to `/install`. That's the whole flow:
    installation, and drops the user on `/dashboard`.
 5. Every subsequent pull request fires the webhook and gets a review.
 
+## Billing
+
+Every installation starts on a trial (50 reviews) so the one-click install stays
+one click — nobody types a card number to finish setting up. When the trial runs
+out, `review_allowed()` blocks further reviews and the check run says why.
+
+`/billing/upgrade?installation_id=N` opens Stripe Checkout; the completed
+`checkout.session.completed` webhook moves the account to `pro`, and a cancelled
+subscription or failed payment moves it back to `trial`. Stripe webhooks are
+signature-verified with a timestamp tolerance, so a captured webhook can't be
+replayed later to re-upgrade a cancelled account.
+
+With no Stripe keys configured the service runs in trial-only mode and says so
+on the dashboard, rather than failing or pretending an upgrade happened.
+
 ## Security notes
 
 These are load-bearing, not boilerplate:
@@ -100,11 +119,13 @@ These are load-bearing, not boilerplate:
   removed after checkout, and the working directory is deleted in a `finally`.
 - **Dependency installation runs third-party build tooling.** Every subprocess
   is timeout-bounded, and the worker is expected to be disposable.
+- **Stripe webhooks are signature-verified with a 5-minute tolerance**, so a
+  captured upgrade event can't be replayed against a cancelled account.
 
 ## Known gaps
 
 - Reviews run as FastAPI background tasks. That's honest for v1 but means a
   restart drops in-flight work — a real queue is the next step.
 - SQLite. Fine for one worker; swap `store.py` for Postgres before scaling out.
-- Billing is modeled (trial counter, plan field) but there's no checkout flow
-  wired up yet.
+- Reviews are scoped to one project per repository; monorepos with several
+  independent Solidity projects will need per-path configuration.

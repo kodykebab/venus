@@ -1,7 +1,12 @@
 # ParaCheck
 
-A parallelism-conflict analysis tool for Monad smart contracts, proven on two
-demonstration AMM contracts with real, measured on-chain data.
+Automated code review for EVM smart contracts — static analysis, a category of
+finding nothing else checks, and measured proof instead of inference.
+
+Runs as a CLI, a web upload, a GitHub Action, or a GitHub App that reviews every
+pull request. Started as a Monad-specific parallelism analyzer (that part is
+still here, deployed and verified on Monad Testnet); it now reviews any
+EVM-compatible chain.
 
 Monad's optimistic parallel execution runs transactions in parallel assuming no
 conflicts, then merges them serially - any transaction whose read state was altered by
@@ -22,9 +27,50 @@ It's demonstrated on `NaiveAMM` (a naive single-reserve-slot constant-product AM
 conflicts heavily under concurrent load) and `ShardedAMM` (an identical-interface AMM
 whose reserves are split across price bands, which conflicts far less).
 
+## What a review actually contains
+
+Three analyzers, one report, ranked by severity:
+
+| Layer | What it finds | Evidence |
+|---|---|---|
+| **Slither's detector suite** (~100 checks) | Reentrancy, access control, arbitrary sends, gas waste | Static |
+| **Parallelism classifier** | Storage slots that serialize concurrent transactions | Static |
+| **Fork simulation** | Whether those slots *actually* collide under load | **Measured** |
+
+Then Claude turns the findings into a prioritized review with a verdict, rather
+than a table of everything the tools noticed. Without an API key the review
+still posts — rendered directly from the findings.
+
+The third layer is the unusual one. A pull request's contract isn't deployed
+anywhere yet, so ParaCheck spins up a throwaway chain (optionally forking real
+state), deploys the contract, fires concurrent transactions into a single block,
+and diffs the storage writes out of the execution trace. On the sample contract
+that turns "`totalStaked` looks contended" into "5 concurrent `stake()` calls,
+all 5 in one block, 10 colliding transaction pairs."
+
+## Chains
+
+Parallelism analysis only runs where it means something — chains with optimistic
+parallel execution (Monad, Sei, MegaETH). On Ethereum, Arbitrum, OP, Base,
+Polygon, BSC and Avalanche, execution is sequential, so that pass is skipped and
+the review says so rather than reporting noise. Everything Slither checks is
+execution-model independent and runs everywhere.
+
+```bash
+paracheck review src/Vault.sol --chain base
+paracheck review . --chain monad --simulate
+```
+
+## Running it as a service
+
+[`service/`](service/README.md) is a GitHub App: one click installs it, and
+every subsequent pull request gets a Check Run with inline annotations on the
+flagged lines. `service/README.md` has the App registration steps and the exact
+permission list.
+
 ## Live demo
 
-- Demo page: **_pending - not yet deployed (Vercel import pending)_**
+- Demo page: [static-ruby-psi.vercel.app](https://static-ruby-psi.vercel.app/)
 - `NaiveAMM`: [`0x65a0C262a20a34568242ABD95894C79E28CC5Fb8`](https://testnet.monadscan.com/address/0x65a0C262a20a34568242ABD95894C79E28CC5Fb8) (verified)
 - `ShardedAMM`: [`0x3e3b4e31931f341F10E0f102ff885357Ac5D3834`](https://testnet.monadscan.com/address/0x3e3b4e31931f341F10E0f102ff885357Ac5D3834) (verified, 3 bands)
 - Demo tokens: [`token0`](https://testnet.monadscan.com/address/0x6cAC62D51748d7387C0fE6ce27BEa1B609E60362) / [`token1`](https://testnet.monadscan.com/address/0x2d7815f4882a27E9e4Eb39262A266fC11589C79e) (verified)
@@ -39,12 +85,24 @@ band, landed in the same block and produced **zero** conflicts. See
 ## Repo layout
 
 ```
-contracts/       Foundry project: NaiveAMM, ShardedAMM, DemoToken, tests, deploy script
+paracheck              CLI entry point - `paracheck review`, `--help` for the rest
 analyzer/
-  static/        Python/Slither static analyzer (run_slither.py, classify.py, report.py)
-  dynamic/       TypeScript dynamic analyzer (rpc_client, trace_diff, conflict_counter)
-  cli.ts         `paracheck analyze|loadtest|livetx|deployment-info`
-demo-page/       Static demo page + Vercel serverless live-tx endpoint
+  static/              Python analysis
+    review.py            orchestrator: compile once, run every pass, merge
+    schema.py            the one Finding shape everything normalizes into
+    detectors.py         Slither's ~100 built-in detectors
+    classify.py          the parallelism classifier
+    chains.py            which chains actually execute in parallel
+    dynamic_review.py    cross-references measurement against prediction
+    render.py            deterministic Markdown (the no-API-key path)
+  dynamic/
+    simulate.py          fork, deploy, load, trace - the measured layer
+    *.ts                 live-chain conflict measurement (Monad demo)
+  llm/synthesize.py    Claude turns findings into a prioritized review
+service/               GitHub App: install flow, webhooks, Check Runs, billing
+.github/actions/analyze  The no-server GitHub Action
+contracts/             Foundry project: NaiveAMM, ShardedAMM, DemoToken + samples
+demo-page/             Static demo page + Vercel live-tx endpoint
 ```
 
 ## How ShardedAMM works
@@ -61,7 +119,10 @@ with each other.
 A single `paracheck` wrapper at the repo root dispatches to everything else:
 
 ```bash
-./paracheck contracts/samples/StakingPoolSample.sol   # analyze one Solidity file
+./paracheck review src/Vault.sol                       # review one file
+./paracheck review . --chain base                      # review a whole project
+./paracheck review . --simulate --fail-on high         # measure contention, gate CI
+./paracheck contracts/samples/StakingPoolSample.sol    # parallelism only (fast, JSON)
 ./paracheck analyze                                    # regenerate demo-page static reports
 ./paracheck loadtest --chain-id 10143 --traders 5 --bands 3
 ./paracheck livetx --contract naive --amount 5
@@ -70,8 +131,9 @@ A single `paracheck` wrapper at the repo root dispatches to everything else:
 ./paracheck --help
 ```
 
-A `.sol` path is analyzed directly (single, importless file - no `import` resolution);
-anything else forwards to `analyzer/cli.ts`. Non-secret defaults (Python venv path,
+`review` takes either a file (self-contained, no imports) or a project directory
+(imports resolved, dependencies installed). A bare `.sol` path runs the fast
+parallelism-only pass; anything else forwards to `analyzer/cli.ts`. Non-secret defaults (Python venv path,
 Foundry bin directory, chain ID) come from [`paracheck.json`](paracheck.json) at the repo
 root, falling back to `config.json` if that file doesn't exist - `paracheck config` shows
 exactly what got resolved. Secrets never go in either file: `loadtest`/`livetx` still read
@@ -81,39 +143,49 @@ your shell environment, same as always. Global flags (`--config`, `--venv`,
 
 ## GitHub Action
 
-[`.github/actions/analyze`](.github/actions/analyze) wraps the same static classifier as a
-reusable composite Action - point it at one self-contained Solidity file (no `import`s,
-same constraint as `paracheck <file>.sol`) and it posts a summary comment on the PR, with
-an optional score threshold to fail the job outright. No server, no GitHub App, no OAuth -
-just the repo's own built-in `GITHUB_TOKEN`.
+[`.github/actions/analyze`](.github/actions/analyze) runs the full review as a reusable
+composite Action and posts it as a PR comment, optionally failing the job at a severity
+you choose. In a pull request it scopes the output to the `.sol` files that PR touches.
+No server, no GitHub App, no OAuth - just the repo's own built-in `GITHUB_TOKEN`.
+
+For a persistent install with Check Runs and inline annotations instead, run
+[`service/`](service/README.md) as a GitHub App.
 
 ```yaml
 # .github/workflows/paracheck.yml
 on:
   pull_request:
-    paths: ["src/MyContract.sol"]
+    paths: ["**/*.sol"]
 
 permissions:
   contents: read
   pull-requests: write   # required for the PR comment
 
 jobs:
-  analyze:
+  review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: kodykebab/venus/.github/actions/analyze@main
         with:
-          contract-path: src/MyContract.sol
-          fail-below-score: "50"   # optional - omit to report-only, never fail the job
+          target: .                 # a project directory, or a single .sol file
+          chain: monad              # gates the parallelism pass
+          fail-on: high             # omit to report-only, never fail the job
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # optional
 ```
 
 | Input | Required | Default | Meaning |
 |---|---|---|---|
-| `contract-path` | yes | - | Path to a single, self-contained `.sol` file |
-| `fail-below-score` | no | `""` (never fails) | Fail the job if the lowest parallelism score is below this |
-| `comment-on-pr` | no | `"true"` | Post the summary as a PR comment |
+| `target` | no | `"."` | A project directory, or a single self-contained `.sol` file |
+| `chain` | no | `"monad"` | Target chain; parallelism analysis only runs on parallel-execution chains |
+| `fail-on` | no | `""` (never fails) | Fail the job at or above this severity |
+| `fail-below-score` | no | `""` (never fails) | Fail if the lowest parallelism score is below this |
+| `min-severity` | no | `"low"` | Drop findings below this severity |
+| `scope-to-changed-files` | no | `"true"` | In a PR, report only on the `.sol` files it touches |
+| `anthropic-api-key` | no | `""` | Enables Claude synthesis; without it the findings render directly |
+| `comment-on-pr` | no | `"true"` | Post the review as a PR comment |
 | `github-token` | no | `${{ github.token }}` | Only needed if the default token can't comment (e.g. some fork PR setups) |
+| `contract-path` | no | `""` | Deprecated alias for `target` |
 
 Output: `report-json` (the raw JSON, same shape as everywhere else on this project).
 
@@ -122,9 +194,10 @@ this repo is both the reference example and a live self-test - it runs the actio
 [`contracts/samples/StakingPoolSample.sol`](contracts/samples/StakingPoolSample.sol) on
 every PR that touches it.
 
-**Known limitation**, same as the CLI and the web upload page: single self-contained file
-only, no `import` resolution - a contract that imports other files comes back
-`unanalyzable` with a clear reason, not a crash or a wrong answer.
+Pointing `target` at a **directory** resolves imports and installs dependencies.
+Pointing it at a single **file** doesn't - that path has no `import` resolution, so a
+file that imports others comes back `unanalyzable` with a clear reason rather than a
+crash or a wrong answer. The web upload page is file-mode only, and has the same limit.
 
 ## Running it yourself
 

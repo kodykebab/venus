@@ -20,7 +20,9 @@ def isolated_env(monkeypatch):
     monkeypatch.setenv("PARACHECK_DB", os.path.join(tempfile.mkdtemp(), "test.db"))
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("GITHUB_APP_SLUG", "paracheck-ci")
-    for module in ("store", "app", "jobs", "github_auth"):
+    # billing holds a module-level reference to store; leaving it cached would
+    # leak the previous test's database into the next one.
+    for module in ("store", "app", "jobs", "github_auth", "billing"):
         sys.modules.pop(module, None)
     import store
 
@@ -213,3 +215,64 @@ def test_dashboard_shows_repositories_and_quota(client):
     assert "acme/repo" in body
     assert "reviews left" in body
     assert "comment" in body
+
+
+# --- billing ----------------------------------------------------------------
+
+def test_billing_webhook_rejects_bad_signature(client, monkeypatch):
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    response = client.post(
+        "/billing/webhook",
+        content=b'{"type":"checkout.session.completed"}',
+        headers={"Stripe-Signature": "t=1,v1=deadbeef"},
+    )
+    assert response.status_code == 401
+
+
+def test_billing_webhook_upgrades_the_installation(client, monkeypatch):
+    import hashlib
+    import hmac
+    import time
+
+    import billing
+    import store
+
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    store.upsert_installation(77, "acme", "User")
+
+    payload = b'{"type":"checkout.session.completed","data":{"object":{"client_reference_id":"77"}}}'
+    timestamp = int(time.time())
+    digest = hmac.new(b"whsec_test", f"{timestamp}.".encode() + payload, hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/billing/webhook",
+        content=payload,
+        headers={"Stripe-Signature": f"t={timestamp},v1={digest}"},
+    )
+    assert response.status_code == 200
+    assert billing.billing_status(77)["plan"] == "pro"
+
+
+def test_upgrade_is_honest_when_billing_is_unconfigured(client, monkeypatch):
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("STRIPE_PRICE_ID", raising=False)
+    response = client.get("/billing/upgrade?installation_id=1", follow_redirects=False)
+    assert response.status_code == 503
+    assert "trial-only mode" in response.text
+
+
+def test_exhausted_trial_blocks_further_reviews(client):
+    import store
+
+    store.upsert_installation(78, "acme", "User")
+    with store.connect() as connection:
+        connection.execute("UPDATE installations SET trial_reviews = 0 WHERE id = 78")
+
+    allowed, reason = store.review_allowed(78)
+    assert allowed is False and "Trial exhausted" in reason
+
+    # A paid plan lifts the gate.
+    import billing
+
+    billing.set_plan(78, "pro")
+    assert store.review_allowed(78)[0] is True

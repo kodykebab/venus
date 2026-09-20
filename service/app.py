@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+import billing
 import jobs
 import store
 from github_auth import (
@@ -170,6 +171,38 @@ def _handle_pull_request(payload: dict, installation_id: int | None, background:
     )
 
 
+@app.get("/billing/upgrade")
+async def billing_upgrade(installation_id: int, request: Request):
+    """Sends the user to Stripe Checkout. Only reachable after install - the
+    trial is what keeps signup itself card-free."""
+    base = PUBLIC_URL or str(request.base_url).rstrip("/")
+    url = await billing.create_checkout_session(
+        installation_id,
+        success_url=f"{base}/dashboard?installation_id={installation_id}",
+        cancel_url=f"{base}/dashboard?installation_id={installation_id}",
+    )
+    if url is None:
+        return HTMLResponse(
+            _page("<h1>Billing isn't configured</h1><p>This deployment is running in "
+                  "trial-only mode. Set STRIPE_SECRET_KEY and STRIPE_PRICE_ID to enable "
+                  "subscriptions.</p>"),
+            status_code=503,
+        )
+    return RedirectResponse(url, status_code=302)
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request, stripe_signature: str = Header(default="")) -> JSONResponse:
+    body = await request.body()
+    if not billing.verify_webhook_signature(body, stripe_signature):
+        raise HTTPException(status_code=401, detail="Bad signature")
+
+    outcome = billing.apply_event(await request.json())
+    if outcome:
+        print(f"paracheck: {outcome}")
+    return JSONResponse({"ok": True})
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(installation_id: int | None = None) -> HTMLResponse:
     if installation_id is None:
@@ -183,11 +216,16 @@ def dashboard(installation_id: int | None = None) -> HTMLResponse:
     reviews = store.recent_reviews(installation_id, 20)
 
     plan = installation["plan"]
-    quota = (
-        f"Trial - {installation['trial_reviews']} reviews left"
-        if plan == "trial"
-        else f"Plan: {plan}"
-    )
+    if plan == "trial":
+        quota = f"Trial — {installation['trial_reviews']} reviews left"
+        upgrade = (
+            f'<p><a href="/billing/upgrade?installation_id={installation_id}">Upgrade</a></p>'
+            if billing.configured()
+            else '<p><em>Billing isn\'t configured on this deployment — trial only.</em></p>'
+        )
+    else:
+        quota = f"Plan: {plan}"
+        upgrade = ""
 
     repo_rows = "".join(f"<li><code>{r}</code></li>" for r in repos) or "<li>No repositories yet.</li>"
     review_rows = "".join(
@@ -199,6 +237,7 @@ def dashboard(installation_id: int | None = None) -> HTMLResponse:
     return HTMLResponse(_page(f"""
       <h1>ParaCheck</h1>
       <p><strong>{installation['account_login']}</strong> — {quota}</p>
+      {upgrade}
       <h2>Connected repositories</h2>
       <ul>{repo_rows}</ul>
       <h2>Recent reviews</h2>
