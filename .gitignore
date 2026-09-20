@@ -25,3 +25,6 @@ QUICKSTART.md
 
 # Editor / OS
 .DS_Store
+service/.env
+paracheck.db
+*.db
