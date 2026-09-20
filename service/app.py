@@ -18,8 +18,10 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import billing
+import dashboard as pages
 import jobqueue as job_queue
 import store
+import ui
 import worker
 from github_auth import (
     ConfigurationError,
@@ -201,12 +203,7 @@ async def billing_upgrade(installation_id: int, request: Request):
         cancel_url=f"{base}/dashboard?installation_id={installation_id}",
     )
     if url is None:
-        return HTMLResponse(
-            _page("<h1>Billing isn't configured</h1><p>This deployment is running in "
-                  "trial-only mode. Set STRIPE_SECRET_KEY and STRIPE_PRICE_ID to enable "
-                  "subscriptions.</p>"),
-            status_code=503,
-        )
+        return HTMLResponse(pages.billing_unconfigured(), status_code=503)
     return RedirectResponse(url, status_code=302)
 
 
@@ -222,55 +219,51 @@ async def billing_webhook(request: Request, stripe_signature: str = Header(defau
     return JSONResponse({"ok": True})
 
 
+@app.get("/", response_class=HTMLResponse)
+def landing() -> HTMLResponse:
+    return HTMLResponse(pages.landing(CHAIN, store.TRIAL_REVIEWS))
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(installation_id: int | None = None) -> HTMLResponse:
     if installation_id is None:
-        return HTMLResponse(_page("<p>No installation selected.</p>"))
+        return HTMLResponse(pages.no_installation(), status_code=400)
 
     installation = store.get_installation(installation_id)
     if installation is None:
-        return HTMLResponse(_page("<p>Unknown installation.</p>"), status_code=404)
+        return HTMLResponse(pages.unknown_installation(), status_code=404)
 
-    repos = store.active_repositories(installation_id)
-    reviews = store.recent_reviews(installation_id, 20)
+    try:
+        queue = job_queue.stats()
+    except Exception:  # noqa: BLE001 - the dashboard must render even if the queue can't be read
+        queue = {}
 
-    plan = installation["plan"]
-    if plan == "trial":
-        quota = f"Trial — {installation['trial_reviews']} reviews left"
-        upgrade = (
-            f'<p><a href="/billing/upgrade?installation_id={installation_id}">Upgrade</a></p>'
-            if billing.configured()
-            else '<p><em>Billing isn\'t configured on this deployment — trial only.</em></p>'
-        )
-    else:
-        quota = f"Plan: {plan}"
-        upgrade = ""
-
-    repo_rows = "".join(f"<li><code>{r}</code></li>" for r in repos) or "<li>No repositories yet.</li>"
-    review_rows = "".join(
-        f"<tr><td><code>{r['full_name']}</code></td><td>#{r['pr_number']}</td>"
-        f"<td>{r['verdict'] or '-'}</td><td>{r['findings']}</td></tr>"
-        for r in reviews
-    ) or "<tr><td colspan=4>No reviews yet - open a pull request.</td></tr>"
-
-    return HTMLResponse(_page(f"""
-      <h1>ParaCheck</h1>
-      <p><strong>{installation['account_login']}</strong> — {quota}</p>
-      {upgrade}
-      <h2>Connected repositories</h2>
-      <ul>{repo_rows}</ul>
-      <h2>Recent reviews</h2>
-      <table><tr><th>Repository</th><th>PR</th><th>Verdict</th><th>Findings</th></tr>{review_rows}</table>
-    """))
+    return HTMLResponse(pages.installation_page(
+        installation=installation,
+        installation_id=installation_id,
+        repos=store.active_repositories(installation_id),
+        reviews=store.recent_reviews(installation_id, 25),
+        queue=queue,
+        settings=_settings(),
+    ))
 
 
-def _page(body: str) -> str:
-    return f"""<!doctype html><html><head><meta charset="utf-8">
-<title>ParaCheck</title><style>
-body{{font-family:'IBM Plex Sans',-apple-system,sans-serif;max-width:760px;margin:0 auto;padding:40px 20px;
-background:#faf9f7;color:#14130f}}
-h1{{font-size:28px;letter-spacing:-.02em}} h2{{font-size:16px;margin-top:32px}}
-table{{width:100%;border-collapse:collapse;font-size:14px}}
-th,td{{text-align:left;padding:8px;border-bottom:1px solid #ddd9cf}}
-code{{background:#f1efe8;padding:2px 6px;border-radius:3px;font-size:13px}}
-</style></head><body>{body}</body></html>"""
+def _settings() -> dict:
+    """What this deployment is configured to do, for the dashboard to show."""
+    return {
+        "chain": CHAIN,
+        "min_severity": MIN_SEVERITY,
+        "fail_on": FAIL_ON,
+        "billing": billing.configured(),
+        "inline_worker": INLINE_WORKER,
+        "llm": _llm_configured(),
+    }
+
+
+def _llm_configured() -> bool:
+    try:
+        from synthesize import credentials_available
+
+        return credentials_available()
+    except Exception:  # noqa: BLE001 - absence of the analyzer path is not a dashboard error
+        return False

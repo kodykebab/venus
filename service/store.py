@@ -18,13 +18,17 @@ DEFAULT_DB_PATH = os.environ.get("PARACHECK_DB", "paracheck.db")
 # or an abandoned install.
 STATE_TTL_SECONDS = 600
 
+# Free reviews a new installation gets. Interpolated into the schema so the
+# number the landing page advertises can't drift from the number granted.
+TRIAL_REVIEWS = 50
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS installations (
     id              INTEGER PRIMARY KEY,
     account_login   TEXT NOT NULL,
     account_type    TEXT NOT NULL DEFAULT 'User',
     active          INTEGER NOT NULL DEFAULT 1,
-    trial_reviews   INTEGER NOT NULL DEFAULT 50,
+    trial_reviews   INTEGER NOT NULL DEFAULT {trial_reviews},
     plan            TEXT NOT NULL DEFAULT 'trial',
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
@@ -54,7 +58,7 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 
 CREATE INDEX IF NOT EXISTS reviews_by_installation ON reviews (installation_id, created_at DESC);
-"""
+""".format(trial_reviews=TRIAL_REVIEWS)
 
 
 @contextmanager
