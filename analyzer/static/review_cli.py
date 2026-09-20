@@ -20,6 +20,23 @@ from review import review_file, review_project  # noqa: E402
 from schema import at_least  # noqa: E402
 
 
+def _simulation_spec() -> dict | None:
+    """Reads the `simulation` block from paracheck.json / config.json at the repo
+    root. What to simulate is project knowledge - constructor args, which
+    function carries load - so it's declared, never guessed."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for name in ("paracheck.json", "config.json"):
+        path = os.path.join(root, name)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                spec = json.load(fh).get("simulation")
+            if spec:
+                return spec
+    print("paracheck: --simulate needs a `simulation` block in paracheck.json - skipping.",
+          file=sys.stderr)
+    return None
+
+
 def build_output(report: dict, target: str, use_llm: bool, diff: str | None, source: str | None) -> str:
     if use_llm:
         try:
@@ -49,6 +66,9 @@ def main() -> None:
     parser.add_argument("--min-severity", default="info", help="drop findings below this severity")
     parser.add_argument("--fail-on", default=None, help="exit 1 if any finding is at or above this severity")
     parser.add_argument("--json", action="store_true", help="emit the raw report as JSON")
+    parser.add_argument("--simulate", action="store_true",
+                        help="deploy the contract to a throwaway chain and measure real "
+                             "contention (needs a `simulation` block in paracheck.json)")
     parser.add_argument("--no-llm", action="store_true", help="skip Claude synthesis, render findings directly")
     parser.add_argument("--out", default=None, help="write to this file instead of stdout")
     parser.add_argument("--json-out", default=None, help="also write the raw report JSON here")
@@ -65,7 +85,11 @@ def main() -> None:
         )
     else:
         report = review_file(
-            args.target, solc=args.solc, min_severity=args.min_severity, chain=args.chain
+            args.target,
+            solc=args.solc,
+            min_severity=args.min_severity,
+            chain=args.chain,
+            simulation=_simulation_spec() if args.simulate else None,
         )
 
     if args.json:

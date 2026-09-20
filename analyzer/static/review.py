@@ -16,6 +16,7 @@ from slither import Slither
 from chains import Chain, resolve_chain
 from classify import classify
 from detectors import run_detectors
+from dynamic_review import run_simulation, simulation_findings
 from project import detect_project, install_dependencies
 from run_slither import (
     UNANALYZABLE_MESSAGE,
@@ -79,9 +80,14 @@ def review_file(
     solc: str | None = None,
     min_severity: str = "info",
     chain: str | int | None = None,
+    simulation: dict | None = None,
 ) -> dict:
     """Full static review of one self-contained Solidity file. Never raises - every
-    failure mode comes back as `unanalyzable: true` with a reason."""
+    failure mode comes back as `unanalyzable: true` with a reason.
+
+    `simulation` is an optional spec (see analyzer/dynamic/simulate.py); when
+    given, the contract is actually deployed to a throwaway chain and hit with
+    concurrent traffic, so predicted contention can be confirmed by measurement."""
     target_chain = resolve_chain(chain)
     try:
         slither = load_slither(source_file, solc=solc)
@@ -125,6 +131,15 @@ def review_file(
     # Detectors run once for the whole compilation unit, not per contract.
     findings.extend(run_detectors(slither))
 
+    simulation_result = None
+    if simulation and target_chain.runs_parallelism_analysis:
+        simulation_result = run_simulation(source_file, simulation, solc)
+        target_name = simulation.get("contract")
+        for contract in contracts:
+            if contract.name == target_name:
+                findings.extend(simulation_findings(contract, simulation_result, source_file))
+                break
+
     # Slither reports paths relative to its own compilation root, which for a
     # temp/absolute target comes out as ../../../.. noise. Every finding here
     # belongs to the one file the caller named, so report it under that path -
@@ -141,6 +156,7 @@ def review_file(
     return {
         "unanalyzable": False,
         "chain": _chain_summary(target_chain),
+        "simulation": simulation_result,
         "contracts": reports,
         "findings": [f.to_dict() for f in findings],
         "summary": {

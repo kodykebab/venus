@@ -8,5 +8,14 @@
   },
   "chainId": 10143,
   "defaultLoadtestTraders": 5,
-  "defaultBands": 3
+  "defaultBands": 3,
+  "simulation": {
+    "contract": "StakingPoolSample",
+    "constructorArgs": [],
+    "concurrent": {
+      "signature": "stake()",
+      "value": "1000000000000000000"
+    },
+    "senders": 5
+  }
 }
