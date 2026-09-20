@@ -181,19 +181,31 @@ def _api_key(installation: dict, installation_id: int, settings: dict,
         state = f'<span class="chip good">Key installed &middot; <code>{ui.esc(hint)}</code></span>'
         action = ("Replace it by pasting a new one, or remove it to go back to plain "
                   "rendered reviews.")
-        remove = (f'<button class="btn ghost" name="action" value="remove" type="submit">'
-                  f'Remove key</button>')
+        remove = ('<button class="btn ghost" name="action" value="remove" type="submit">'
+                  'Remove key</button>')
+        getting = ""
     else:
         state = '<span class="chip">No key &middot; reviews are rendered from findings</span>'
-        action = ("Add one and reviews get a written summary that prioritises the findings "
-                  "instead of listing them.")
+        action = ("Reviews already work without one. Add a key and they arrive written and "
+                  "prioritised rather than as a list of findings.")
         remove = ""
+        # Someone who has never used the API has no idea where a key comes from,
+        # and "get an API key" is not a searchable instruction. Link the page.
+        getting = """
+        <ol class="muted small" style="margin:14px 0 4px;padding-left:20px;line-height:1.9">
+          <li>Open <a href="https://console.anthropic.com/settings/keys" target="_blank"
+              rel="noopener noreferrer">the Anthropic console</a> and sign in.</li>
+          <li>You'll need billing set up on that account - the API is pay-as-you-go and
+              separate from a Claude.ai subscription, which doesn't include API access.</li>
+          <li>Create a key, copy it, and paste it below. It starts <code>sk-ant-</code>.</li>
+        </ol>"""
 
     return ui.section("Claude API key", f"""
       {banner}
       <div class="card card-pad">
         <p style="margin-top:0">{state}</p>
         <p class="muted small">{ui.esc(action)}</p>
+        {getting}
         <form method="post" action="/settings/api-key" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
           <input type="hidden" name="installation_id" value="{ui.esc(installation_id)}">
           <input type="hidden" name="csrf" value="{ui.esc(csrf)}">
@@ -208,9 +220,10 @@ def _api_key(installation: dict, installation_id: int, settings: dict,
         <p class="muted small" style="margin-bottom:0;margin-top:14px">
           The key is checked against the Anthropic API before it is stored, encrypted at
           rest with a secret that isn't in the database, and never written to a log or
-          passed to the build tools that run your repository's code. Usage is billed to
-          your own Anthropic account. Reviews keep working without one - they just arrive
-          without the written summary.
+          passed to the build tools that run your repository's code. It is never shown
+          again - only its last four characters. Usage is billed to your own Anthropic
+          account, per review, at their published API rates; you can revoke the key from
+          the console at any time and reviews fall back to plain rendering.
         </p>
       </div>""")
 

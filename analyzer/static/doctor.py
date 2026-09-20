@@ -128,7 +128,8 @@ def check_llm() -> Check:
     if credentials_available():
         return Check("claude api", OK, "credentials found")
     return Check("claude api", WARN, "no credentials - reviews render from findings directly",
-                 "export ANTHROPIC_API_KEY=sk-ant-...")
+                 "put ANTHROPIC_API_KEY=sk-ant-... in .env (create one at "
+                 "https://console.anthropic.com/settings/keys)")
 
 
 def check_git() -> Check:
