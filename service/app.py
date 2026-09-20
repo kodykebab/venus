@@ -18,13 +18,13 @@ from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import billing
+import clerk_auth
 import dashboard as pages
 import jobqueue as job_queue
 import secrets_store
 import sessions
 import store
 import ui
-import worker
 from github_auth import (
     ConfigurationError,
     authenticated_user,
@@ -37,6 +37,7 @@ PUBLIC_URL = os.environ.get("PARACHECK_PUBLIC_URL", "")
 MIN_SEVERITY = os.environ.get("PARACHECK_MIN_SEVERITY", "low")
 FAIL_ON = os.environ.get("PARACHECK_FAIL_ON") or None
 CHAIN = os.environ.get("PARACHECK_CHAIN", "monad")
+SALES_EMAIL = os.environ.get("ENTERPRISE_SALES_EMAIL", "")
 
 INLINE_WORKER = os.environ.get("PARACHECK_INLINE_WORKER", "1").lower() in ("1", "true", "yes")
 
@@ -204,21 +205,69 @@ def _handle_pull_request(payload: dict, installation_id: int | None) -> None:
 
 
 @app.get("/billing/upgrade")
-async def billing_upgrade(installation_id: int, request: Request):
+async def billing_upgrade(installation_id: int, request: Request, plan: str = "hobby"):
     if not _may_view(request, installation_id):
         return HTMLResponse(pages.not_your_installation(), status_code=403)
+
+    if clerk_auth.configured():
+        return RedirectResponse(
+            f"/account?installation_id={installation_id}&plan={plan}", status_code=303
+        )
+
+    if plan not in billing.PLANS:
+        raise HTTPException(status_code=400, detail="Choose Hobby or Pro")
 
     """Sends the user to Stripe Checkout. Only reachable after install - the
     trial is what keeps signup itself card-free."""
     base = PUBLIC_URL or str(request.base_url).rstrip("/")
     url = await billing.create_checkout_session(
         installation_id,
+        plan,
         success_url=f"{base}/dashboard?installation_id={installation_id}",
         cancel_url=f"{base}/dashboard?installation_id={installation_id}",
     )
     if url is None:
         return HTMLResponse(pages.billing_unconfigured(), status_code=503)
     return RedirectResponse(url, status_code=302)
+
+
+@app.get("/account", response_class=HTMLResponse)
+def account(installation_id: int, request: Request, plan: str = "hobby") -> HTMLResponse:
+    """Clerk sign-in shell for starting a paid checkout."""
+    if not _may_view(request, installation_id):
+        return HTMLResponse(pages.not_your_installation(), status_code=403)
+    if plan not in billing.PLANS:
+        plan = "hobby"
+    return HTMLResponse(pages.account_page(installation_id, clerk_auth.publishable_key(), plan))
+
+
+@app.post("/billing/checkout")
+async def billing_checkout(request: Request):
+    """Create Checkout only after both GitHub access and Clerk identity pass."""
+    user = clerk_auth.user_id(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    payload = await request.json()
+    try:
+        installation_id = int(payload["installation_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="installation_id is required") from exc
+    if not _may_view(request, installation_id):
+        raise HTTPException(status_code=403, detail="Installation access required")
+    plan = payload.get("plan", "hobby")
+    if plan not in billing.PLANS:
+        raise HTTPException(status_code=400, detail="Choose Hobby or Pro")
+
+    base = PUBLIC_URL or str(request.base_url).rstrip("/")
+    url = await billing.create_checkout_session(
+        installation_id,
+        plan,
+        success_url=f"{base}/dashboard?installation_id={installation_id}",
+        cancel_url=f"{base}/account?installation_id={installation_id}",
+    )
+    if url is None:
+        raise HTTPException(status_code=503, detail="Billing is not configured")
+    return {"url": url}
 
 
 @app.post("/billing/webhook")
@@ -233,9 +282,23 @@ async def billing_webhook(request: Request, stripe_signature: str = Header(defau
     return JSONResponse({"ok": True})
 
 
+@app.get("/enterprise", response_class=HTMLResponse)
+def enterprise() -> HTMLResponse:
+    return HTMLResponse(pages.enterprise_page(SALES_EMAIL))
+
+
 @app.get("/", response_class=HTMLResponse)
 def landing() -> HTMLResponse:
-    return HTMLResponse(pages.landing(CHAIN, store.TRIAL_REVIEWS))
+    return HTMLResponse(pages.landing(CHAIN))
+
+
+@app.get("/pricing", response_class=HTMLResponse)
+def pricing(request: Request, installation_id: int | None = None) -> HTMLResponse:
+    """Public. An installation_id only changes which button is shown, and it is
+    honoured only when this browser actually holds a session for it."""
+    if installation_id is not None and not _may_view(request, installation_id):
+        installation_id = None
+    return HTMLResponse(pages.pricing_page(SALES_EMAIL, installation_id))
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -264,8 +327,10 @@ def dashboard(
         installation_id=installation_id,
         repos=store.active_repositories(installation_id),
         reviews=store.recent_reviews(installation_id, 25),
+        scans=store.scan_statuses(installation_id),
         queue=queue,
         settings=_settings(),
+        quota=store.quota_status(installation_id),
         csrf=sessions.csrf_token(installation_id),
         notice=NOTICES.get(notice),
     ))
@@ -279,7 +344,56 @@ NOTICES = {
     "rejected": ("error", "That key was rejected by the Anthropic API and has not been saved."),
     "unavailable": ("error", "This deployment can't store keys: no encryption secret is configured."),
     "missing": ("error", "No key was submitted."),
+    "scanning": ("ok", "Scanning the default branch. The result appears here and as a "
+                       "check on the commit, usually within a couple of minutes."),
+    "quota": ("error", "That scan was not started - this week's quota is used up."),
+    "unknown_repo": ("error", "ParaCheck doesn't have access to that repository."),
 }
+
+
+@app.post("/scan")
+async def scan_repository(
+    request: Request,
+    installation_id: int = Form(...),
+    full_name: str = Form(...),
+    csrf: str = Form(""),
+) -> RedirectResponse:
+    """The "Scan now" button: analyse a repository's default branch without
+    waiting for a pull request.
+
+    This is the first useful thing a new installation can do, so it refuses
+    clearly rather than silently queueing work that will be rejected later."""
+    if not _may_view(request, installation_id):
+        return HTMLResponse(pages.not_your_installation(), status_code=403)
+    if not sessions.csrf_valid(installation_id, csrf):
+        raise HTTPException(status_code=400, detail="Stale form - reload the dashboard.")
+
+    back = f"/dashboard?installation_id={installation_id}"
+
+    # The repository must be one GitHub actually granted us, not just a name
+    # someone posted: otherwise this is a way to point the worker at any repo
+    # the installation token can reach.
+    if not store.is_repository_active(installation_id, full_name):
+        return RedirectResponse(f"{back}&notice=unknown_repo", status_code=303)
+
+    allowed, reason = store.review_allowed(installation_id)
+    if not allowed:
+        store.record_scan_outcome(installation_id, full_name, "blocked", reason)
+        return RedirectResponse(f"{back}&notice=quota", status_code=303)
+
+    store.record_scan_outcome(installation_id, full_name, "queued", "Waiting for a worker.")
+    job_queue.enqueue(
+        "scan_repository",
+        {
+            "installation_id": installation_id,
+            "full_name": full_name,
+            "min_severity": MIN_SEVERITY,
+            "fail_on": FAIL_ON,
+            "chain": CHAIN,
+        },
+        dedupe_key=f"scan:{full_name}",
+    )
+    return RedirectResponse(f"{back}&notice=scanning", status_code=303)
 
 
 @app.post("/settings/api-key")
@@ -297,10 +411,11 @@ async def set_api_key(
     carries a notice name rather than any part of the key."""
     if not _may_view(request, installation_id):
         return HTMLResponse(pages.not_your_installation(), status_code=403)
+    back = f"/dashboard?installation_id={installation_id}"
+    if not _claude_enabled():
+        return RedirectResponse(f"{back}&notice=unavailable", status_code=303)
     if not sessions.csrf_valid(installation_id, csrf):
         raise HTTPException(status_code=400, detail="Stale form - reload the dashboard.")
-
-    back = f"/dashboard?installation_id={installation_id}"
 
     if action == "remove":
         store.set_anthropic_key(installation_id, None)
@@ -339,10 +454,16 @@ def _settings() -> dict:
         "min_severity": MIN_SEVERITY,
         "fail_on": FAIL_ON,
         "billing": billing.configured(),
-        "byok": secrets_store.available(),
+        "byok": _claude_enabled() and secrets_store.available(),
+        "claude_enabled": _claude_enabled(),
         "inline_worker": INLINE_WORKER,
-        "llm": _llm_configured(),
+        "llm": _claude_enabled() and _llm_configured(),
+        "clerk": clerk_auth.configured(),
     }
+
+
+def _claude_enabled() -> bool:
+    return os.environ.get("PARACHECK_CLAUDE_ENABLED", "0").lower() in ("1", "true", "yes")
 
 
 def _llm_configured() -> bool:

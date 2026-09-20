@@ -1,118 +1,198 @@
-# Deploying the ParaCheck CI service
+# Deploying ParaCheck on Cloudflare
 
-The service is one container: a FastAPI app that receives GitHub webhooks and a
-worker that drains the review queue. By default they share a process, so there
-is one thing to deploy.
+ParaCheck's launch architecture is Cloudflare plus GitHub Actions:
 
-## Checking what's missing
+- Cloudflare Pages hosts the static demo in `demo-page/`.
+- A Cloudflare Worker owns Clerk, Stripe, GitHub webhook, quota, and D1 control-plane work.
+- GitHub Actions runs Foundry, solc, Slither, and ParaCheck against the repository.
+- Claude is disabled for launch with `PARACHECK_CLAUDE_ENABLED=0`.
 
-```bash
-paracheck doctor --service          # or: docker exec <container> python service/preflight.py
-```
+The Worker scaffold lives in `cloudflare/`. It currently typechecks and has a
+health endpoint, but its payment/webhook routes intentionally return `501` until
+the control plane is implemented.
 
-It names every variable, what breaks without it, and which are optional. Run it
-after setting secrets and before pointing GitHub at the deployment - most of
-these fail late and quietly otherwise (a private key mangled by a secrets UI
-looks set and fails at the first token mint, inside a background job).
+## 1. Prerequisites
 
-## What it needs
-
-| Secret | Where it comes from | Used for |
-| --- | --- | --- |
-| `GITHUB_APP_ID` | the App's settings page | minting installation tokens |
-| `GITHUB_APP_PRIVATE_KEY` | "Generate a private key" on that page (PEM, newlines intact) | signing the App JWT |
-| `GITHUB_WEBHOOK_SECRET` | whatever you set in the App's webhook config | verifying every delivery |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | same page | the OAuth step during install |
-| `PARACHECK_PUBLIC_URL` | your deployed URL | building callback URLs |
-| `ANTHROPIC_API_KEY` | console.anthropic.com | optional fallback key. Installations normally supply their own on the dashboard, billed to their own account; this covers any that haven't |
-| `PARACHECK_ENCRYPTION_KEY` | generate one | encrypts the API keys installations supply. Falls back to `GITHUB_WEBHOOK_SECRET` |
-| `STRIPE_SECRET_KEY` / `STRIPE_PRICE_ID` / `STRIPE_WEBHOOK_SECRET` | Stripe dashboard | paid plans (optional - without them everything runs on the free tier) |
-
-## Fly.io
+Install and authenticate the tools:
 
 ```bash
-fly launch --no-deploy --copy-config       # reads fly.toml as-is
-fly volumes create paracheck_data --size 10 --region iad
-
-fly secrets set \
-  GITHUB_APP_ID=... \
-  GITHUB_WEBHOOK_SECRET=... \
-  GITHUB_CLIENT_ID=... \
-  GITHUB_CLIENT_SECRET=... \
-  PARACHECK_PUBLIC_URL=https://paracheck-ci.fly.dev
-fly secrets set GITHUB_APP_PRIVATE_KEY="$(cat paracheck.private-key.pem)"
-
-fly deploy
+npm install
+npm install -g wrangler
+wrangler login
 ```
 
-Then point the GitHub App's webhook at `https://<your-app>/webhook` and its
-setup URL at `https://<your-app>/setup`.
+You also need accounts for:
 
-## Anywhere else that runs a container
+- Cloudflare Pages, Workers, and D1.
+- Clerk for account authentication.
+- Stripe for paid plans and webhooks.
+- A GitHub App for repository installation/webhooks.
+
+Do not paste private keys, API secrets, or webhook secrets into chat or commit
+them to the repository. Enter them directly when Wrangler prompts for them.
+
+## 2. Cloudflare Pages
+
+Deploy the static demo first:
 
 ```bash
-docker build -t paracheck .
-docker run -d --name paracheck \
-  -p 8000:8000 \
-  -v paracheck-data:/data \
-  --env-file service/.env \
-  --read-only --tmpfs /work:rw,exec,size=8g,mode=1777,nosuid,nodev \
-  --security-opt no-new-privileges \
-  --cap-drop ALL \
-  --pids-limit 512 \
-  --memory 4g \
-  paracheck
+cd demo-page
+npx wrangler pages project create paracheck-demo
+npx wrangler pages deploy . --project-name paracheck-demo
 ```
 
-Those flags are not decoration. Reviewing a pull request runs its build system,
-and `forge install` and `npm install` execute arbitrary code by design, so the
-container should be treated as something an attacker gets code execution in:
+Alternatively connect the repository in the Cloudflare Pages dashboard. Use
+`demo-page` as the build output directory; it is already static and needs no
+build command.
 
-- `--read-only` with a `/work` tmpfs: the checkout is the only writable path,
-  and it is gone when the container is. `mode=1777` matters - the container runs
-  as an unprivileged user and a tmpfs mounts root-owned, so without it nothing
-  can write to its own checkout. `exec` matters too: build tools legitimately run
-  binaries out of `node_modules/.bin`.
-- `--cap-drop ALL` and `--security-opt no-new-privileges`: nothing in a review
-  needs a capability, and nothing should be able to acquire one.
-- `--pids-limit` and `--memory`: a build that forks or allocates without bound
-  takes itself down instead of the host.
+## 3. Cloudflare Worker and D1
 
-The container-level half of that pairs with the process-level half in
-`analyzer/static/sandbox.py`, which strips the service's secrets out of the
-environment every build tool inherits. Neither is enough on its own.
-
-To see why the second half is needed, a `postinstall` script in a reviewed repo
-that prints every environment variable matching `KEY|SECRET|TOKEN|PASSWORD`:
-
-```
-# npm install directly
-SECRET_HITS=["GPG_KEY","GITHUB_APP_PRIVATE_KEY","STRIPE_SECRET_KEY"]
-
-# the same install, as a review runs it
-SECRET_HITS=[]
+```bash
+cd cloudflare
+npm install
+npx wrangler d1 create paracheck
 ```
 
-The container alone does not stop that - the process inside it holds the keys.
+Copy the returned database id into `cloudflare/wrangler.toml`, then initialize
+local and remote schemas:
 
-## Not on Vercel
-
-The demo page deploys to Vercel fine. This service does not: a review takes
-minutes and Vercel functions cap out well below that, the queue and the review
-history need a disk that survives the request, and the analyzer needs a
-filesystem with git, foundry and solc on it. Any host that runs a container
-with a volume works.
-
-## Scaling the worker out
-
-When reviews start waiting on each other, stop running the worker in the API
-process and give it its own:
-
-```
-PARACHECK_INLINE_WORKER=0     # on the web process
-python service/worker.py      # one or more of these
+```bash
+npx wrangler d1 execute paracheck --local --file=schema.sql
+npx wrangler d1 execute paracheck --remote --file=schema.sql
+npx wrangler dev
 ```
 
-Claiming a job is a single atomic `UPDATE`, so workers can be added without
-coordination. They do have to share the database, which is the point at which
-SQLite on a volume becomes the constraint and Postgres starts being worth it.
+The current scaffold is not production-ready yet. `/healthz` reports
+`ready: false`; `/checkout`, `/github/webhook`, and `/stripe/webhook` return
+`501` until implemented.
+
+## 4. Keys and where to get them
+
+### Clerk
+
+From the Clerk Dashboard:
+
+- `CLERK_PUBLISHABLE_KEY`: public browser key, usually starts with `pk_live_`.
+- `CLERK_JWT_KEY`: server-side verification key from the Clerk JWT template.
+- `CLERK_ISSUER`: issuer URL from that JWT template.
+- `CLERK_AUDIENCE`: the audience configured for the template.
+
+Only the publishable key belongs in browser-facing configuration. Put the JWT
+verification key in Worker secrets with `wrangler secret put`.
+
+### Stripe
+
+From the Stripe Dashboard:
+
+- `STRIPE_SECRET_KEY`: server secret key.
+- `STRIPE_HOBBY_PRICE_ID`: recurring Price for Hobby.
+- `STRIPE_PRO_PRICE_ID`: recurring Price for Pro.
+- `STRIPE_WEBHOOK_SECRET`: signing secret for the Worker webhook endpoint.
+
+Use the agreed launch prices only after creating the corresponding recurring
+Prices in Stripe:
+
+- Hobby: `$9/month`, 20 reviews.
+- Pro: `$29/month`, 100 reviews.
+- Enterprise: custom, handled through the mailto form.
+
+Configure Stripe events for:
+
+- `checkout.session.completed`
+- `invoice.paid`
+- `customer.subscription.deleted`
+- `invoice.payment_failed`
+
+### GitHub App
+
+From GitHub App settings:
+
+- `GITHUB_APP_ID`: numeric App ID.
+- `GITHUB_APP_PRIVATE_KEY`: generated PEM private key.
+- `GITHUB_WEBHOOK_SECRET`: webhook signing secret.
+- `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`: OAuth credentials if the setup flow uses GitHub OAuth.
+
+The App needs least-privilege access to repository contents, pull requests, and
+checks. The Worker must verify GitHub signatures before parsing webhook bodies.
+
+### Enterprise
+
+Set `ENTERPRISE_SALES_EMAIL` to the inbox that should receive the browser
+`mailto:` Enterprise enquiry. No SMTP service is required.
+
+### Claude
+
+Do not configure these for launch:
+
+```env
+PARACHECK_CLAUDE_ENABLED=0
+ANTHROPIC_API_KEY=
+```
+
+## 5. Set Worker secrets
+
+From `cloudflare/`, run each command directly and enter the value at the prompt:
+
+```bash
+npx wrangler secret put CLERK_JWT_KEY
+npx wrangler secret put CLERK_ISSUER
+npx wrangler secret put CLERK_AUDIENCE
+npx wrangler secret put GITHUB_APP_ID
+npx wrangler secret put GITHUB_APP_PRIVATE_KEY
+npx wrangler secret put GITHUB_WEBHOOK_SECRET
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put STRIPE_HOBBY_PRICE_ID
+npx wrangler secret put STRIPE_PRO_PRICE_ID
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
+npx wrangler secret put ENTERPRISE_SALES_EMAIL
+```
+
+Never put these values in `wrangler.toml`, `schema.sql`, GitHub commits, or
+client-side JavaScript.
+
+## 6. GitHub Actions execution
+
+The current `.github/actions/analyze` is a composite action. A customer
+repository needs a workflow that invokes it. The initial rollout can provide a
+copy-paste workflow file.
+
+The full GitHub App experience still needs the Worker to:
+
+1. Receive and verify the installation webhook.
+2. Mint an installation token.
+3. Create or update the ParaCheck workflow in selected repositories.
+4. Dispatch or respond to pull-request workflow events.
+5. Decrement quota atomically in D1 before dispatch.
+6. Restore quota if dispatch fails.
+
+Do not advertise automatic installation until this private-repository flow is
+end-to-end tested.
+
+## 7. Deploy
+
+Only after the Worker implementation is complete and `ready` is true:
+
+```bash
+cd cloudflare
+npm run typecheck
+npx wrangler d1 execute paracheck --remote --file=schema.sql
+npx wrangler deploy
+```
+
+Then configure:
+
+- Clerk allowed origins and redirects for the Pages/Worker domains.
+- GitHub App webhook URL: `https://YOUR_WORKER_DOMAIN/github/webhook`.
+- Stripe webhook URL: `https://YOUR_WORKER_DOMAIN/stripe/webhook`.
+- The Pages frontend's API origin to the Worker domain.
+
+## Cost guardrails
+
+- Keep Claude disabled.
+- Use fixed Hobby/Pro review quotas.
+- Reject reviews when quota is exhausted.
+- Deduplicate Stripe and GitHub webhook event IDs in D1.
+- Treat GitHub Actions minutes as a potentially variable cost and document who
+  pays for private-repository Actions usage.
+- Do not delete or replace the analyzer action until a private-repository test
+  passes end to end.

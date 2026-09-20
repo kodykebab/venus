@@ -27,7 +27,7 @@ def isolated_env(monkeypatch):
     # leak the previous test's database into the next one.
     monkeypatch.setenv("PARACHECK_ENCRYPTION_KEY", "test-encryption-secret")
     for module in ("store", "app", "jobs", "jobqueue", "worker", "github_auth",
-                   "billing", "sessions", "secrets_store"):
+                   "billing", "sessions", "secrets_store", "clerk_auth"):
         sys.modules.pop(module, None)
     import jobqueue
     import store
@@ -322,7 +322,7 @@ def test_dashboard_shows_repositories_and_quota(client):
 
     body = signed_in_for(client, 12).get("/dashboard?installation_id=12").text
     assert "acme/repo" in body
-    assert "reviews left" in body
+    assert "Choose a plan" in body
     assert "comment" in body
 
 
@@ -344,6 +344,126 @@ def test_setup_signs_the_browser_in_for_that_installation(client):
     assert cookie, "the browser should now hold a session cookie"
     assert client.get("/dashboard?installation_id=77").status_code == 200
     assert client.get("/dashboard?installation_id=78").status_code == 403
+
+
+# --- one-click repository scan ------------------------------------------------
+
+def scan_form(client, installation_id, full_name, csrf=None):
+    import sessions
+
+    return client.post("/scan", data={
+        "installation_id": str(installation_id),
+        "full_name": full_name,
+        "csrf": csrf if csrf is not None else sessions.csrf_token(installation_id),
+    }, follow_redirects=False)
+
+
+def paid_installation(installation_id, login="acme"):
+    import billing
+    import store
+
+    store.upsert_installation(installation_id, login, "User")
+    store.set_repositories(installation_id, [f"{login}/repo"])
+    billing.set_plan(installation_id, "pro")
+    return f"{login}/repo"
+
+
+def test_scan_now_queues_a_default_branch_scan(client):
+    """The first useful thing a new installation can do shouldn't be "wait for
+    somebody to open a pull request"."""
+    import jobqueue
+
+    repo = paid_installation(90)
+    signed_in_for(client, 90)
+
+    response = scan_form(client, 90, repo)
+    assert response.status_code == 303
+    assert "notice=scanning" in response.headers["location"]
+
+    job = jobqueue.claim()
+    assert job is not None and job.kind == "scan_repository"
+    assert job.payload["full_name"] == repo
+
+
+def test_a_scan_cannot_be_pointed_at_a_repository_we_were_not_given(client):
+    """The installation token can reach every repo GitHub granted; the form
+    field must not be able to choose one that wasn't granted to this account."""
+    import jobqueue
+    import store
+
+    paid_installation(91)
+    signed_in_for(client, 91)
+
+    response = scan_form(client, 91, "someone-else/private")
+    assert "notice=unknown_repo" in response.headers["location"]
+    assert jobqueue.claim() is None
+    assert store.scan_statuses(91) == {}
+
+
+def test_a_scan_needs_a_session_and_a_form_token(client):
+    import jobqueue
+
+    repo = paid_installation(92)
+
+    signed_in_for(client, 999)
+    assert scan_form(client, 92, repo).status_code == 403
+
+    signed_in_for(client, 92)
+    assert scan_form(client, 92, repo, csrf="forged").status_code == 400
+    assert jobqueue.claim() is None
+
+
+def test_an_exhausted_quota_refuses_the_scan_instead_of_queueing_it(client):
+    """Queueing work that will be rejected minutes later by a worker is worse
+    than saying no at the button."""
+    import billing
+    import jobqueue
+    import store
+
+    repo = paid_installation(93)
+    billing.set_plan(93, "hobby")
+    for pr in range(billing.review_limit("hobby")):
+        store.record_review(93, repo, pr, "sha", "comment", 0)
+
+    signed_in_for(client, 93)
+    response = scan_form(client, 93, repo)
+    assert "notice=quota" in response.headers["location"]
+    assert jobqueue.claim() is None
+    assert store.scan_statuses(93)[repo]["state"] == "blocked"
+
+
+def test_repeated_clicks_do_not_queue_repeated_scans(client):
+    import jobqueue
+
+    repo = paid_installation(94)
+    signed_in_for(client, 94)
+    for _ in range(3):
+        scan_form(client, 94, repo)
+
+    assert jobqueue.claim() is not None
+    assert jobqueue.claim() is None
+
+
+def test_the_dashboard_offers_a_scan_button_for_each_repository(client):
+    repo = paid_installation(95)
+    signed_in_for(client, 95)
+    page = client.get("/dashboard?installation_id=95").text
+    assert "Scan now" in page
+    assert f'value="{repo}"' in page
+
+
+def test_dependency_directories_are_not_scanned(tmp_path):
+    """A repo vendoring OpenZeppelin would otherwise submit hundreds of files."""
+    import jobs
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Vault.sol").write_text("contract V {}")
+    (tmp_path / "lib" / "forge-std").mkdir(parents=True)
+    (tmp_path / "lib" / "forge-std" / "Test.sol").write_text("contract T {}")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "Dep.sol").write_text("contract D {}")
+
+    assert jobs.solidity_files_in(str(tmp_path)) == ["src/Vault.sol"]
 
 
 # --- access control -----------------------------------------------------------
@@ -451,6 +571,7 @@ def accepts_any_key(monkeypatch):
     around it."""
     import app as service_app
 
+    monkeypatch.setenv("PARACHECK_CLAUDE_ENABLED", "1")
     monkeypatch.setattr(service_app, "_check_key", lambda key: (True, ""))
 
 
@@ -477,6 +598,7 @@ def test_a_rejected_key_is_not_stored(client, monkeypatch):
     import app as service_app
     import store
 
+    monkeypatch.setenv("PARACHECK_CLAUDE_ENABLED", "1")
     store.upsert_installation(61, "acme", "User")
     signed_in_for(client, 61)
     monkeypatch.setattr(service_app, "_check_key", lambda key: (False, "rejected"))
@@ -543,6 +665,7 @@ def test_reviews_use_the_installations_own_key(monkeypatch):
     import jobs
     import store
 
+    monkeypatch.setenv("PARACHECK_CLAUDE_ENABLED", "1")
     store.upsert_installation(68, "acme", "User")
     store.set_anthropic_key(68, "sk-ant-theirs")
     assert store.anthropic_key(68) == "sk-ant-theirs"
@@ -575,6 +698,36 @@ def test_an_unreadable_key_degrades_instead_of_crashing(client, monkeypatch):
 
 
 # --- billing ----------------------------------------------------------------
+
+def test_account_requires_github_installation_access(client, monkeypatch):
+    monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_public")
+    monkeypatch.setenv("CLERK_JWT_KEY", "not-a-private-key")
+    response = client.get("/account?installation_id=77")
+    assert response.status_code == 403
+
+
+def test_account_shell_exposes_only_the_clerk_publishable_key(client, monkeypatch):
+    import store
+
+    monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_public")
+    monkeypatch.setenv("CLERK_JWT_KEY", "backend-secret-key")
+    store.upsert_installation(78, "acme", "User")
+    body = signed_in_for(client, 78).get("/account?installation_id=78").text
+    assert "pk_test_public" in body
+    assert "backend-secret-key" not in body
+    assert "Continue to checkout" in body
+
+
+def test_checkout_requires_a_verified_clerk_token(client, monkeypatch):
+    import store
+
+    monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_public")
+    monkeypatch.setenv("CLERK_JWT_KEY", "not-a-private-key")
+    store.upsert_installation(79, "acme", "User")
+    response = signed_in_for(client, 79).post(
+        "/billing/checkout", json={"installation_id": 79}
+    )
+    assert response.status_code == 401
 
 def test_billing_webhook_rejects_bad_signature(client, monkeypatch):
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
@@ -610,14 +763,113 @@ def test_billing_webhook_upgrades_the_installation(client, monkeypatch):
     assert billing.billing_status(77)["plan"] == "pro"
 
 
+def test_quota_is_counted_over_a_rolling_week(client):
+    """Quota is counted from the scans actually run, not granted at checkout,
+    so it cannot be left stale by a Stripe event that never arrived."""
+    import billing
+    import store
+
+    store.upsert_installation(76, "acme", "User")
+    billing.set_plan(76, "hobby")
+    limit = billing.review_limit("hobby")
+
+    for pr in range(limit):
+        assert store.review_allowed(76)[0] is True, f"blocked early at scan {pr}"
+        store.record_review(76, "acme/repo", pr, "sha", "comment", 1)
+
+    allowed, reason = store.review_allowed(76)
+    assert allowed is False
+    assert f"{limit}/{limit}" in reason
+    assert store.quota_status(76)["remaining"] == 0
+
+
+def test_quota_frees_up_as_scans_age_out(client):
+    """No cron and no renewal event: a scan leaving the window is the reset."""
+    import time
+
+    import billing
+    import store
+
+    store.upsert_installation(77, "acme", "User")
+    billing.set_plan(77, "hobby")
+    for pr in range(billing.review_limit("hobby")):
+        store.record_review(77, "acme/repo", pr, "sha", "comment", 0)
+    assert store.review_allowed(77)[0] is False
+
+    with store.connect() as connection:
+        connection.execute(
+            "UPDATE reviews SET created_at = ? WHERE pr_number = 0 AND installation_id = 77",
+            (int(time.time()) - store.QUOTA_WINDOW_SECONDS - 60,),
+        )
+
+    assert store.review_allowed(77)[0] is True
+    assert store.quota_status(77)["remaining"] == 1
+
+
+def test_an_unpaid_account_is_told_to_pick_a_plan_not_shown_a_zero_quota(client):
+    import store
+
+    store.upsert_installation(79, "acme", "User")
+    allowed, reason = store.review_allowed(79)
+    assert allowed is False
+    assert "Choose a" in reason
+    assert "0/0" not in reason, "a quota of zero reads like a bug, not a paywall"
+
+
+def test_enterprise_has_no_fixed_cap(client):
+    import billing
+    import store
+
+    store.upsert_installation(80, "acme", "Organization")
+    billing.set_plan(80, "enterprise")
+    for pr in range(150):
+        store.record_review(80, "acme/repo", pr, "sha", "comment", 0)
+    assert store.review_allowed(80)[0] is True
+    assert store.quota_status(80)["remaining"] is None
+
+
+def test_a_renewal_restores_a_lapsed_account(client):
+    """The gap this closes: quota used to be granted at checkout, so a missed
+    recurring event left a paying account throttled to zero."""
+    import billing
+    import store
+
+    store.upsert_installation(81, "acme", "User")
+    billing.set_plan(81, "unpaid")
+
+    billing.apply_event({"type": "invoice.paid", "data": {"object": {
+        "subscription_details": {"metadata": {"installation_id": "81", "plan": "pro"}}}}})
+    assert store.get_installation(81)["plan"] == "pro"
+
+    billing.apply_event({"type": "customer.subscription.updated", "data": {"object": {
+        "status": "canceled", "metadata": {"installation_id": "81", "plan": "pro"}}}})
+    assert store.get_installation(81)["plan"] == "unpaid"
+
+
+def test_plan_quotas_match_what_the_pricing_page_advertises(client):
+    """One source of truth: the page reads billing.PLANS, and the gate reads the
+    same numbers, so they cannot drift apart."""
+    import billing
+    import dashboard
+
+    page = dashboard.pricing_page("sales@example.com")
+    for key in billing.PLANS:
+        details = billing.plan_details(key)
+        assert details["price"] in page
+        assert f"{details['review_limit']} scans per week" in page
+
+
 def test_upgrade_is_honest_when_billing_is_unconfigured(client, monkeypatch):
     monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_PRICE_ID", raising=False)
+    monkeypatch.delenv("STRIPE_HOBBY_PRICE_ID", raising=False)
+    monkeypatch.delenv("STRIPE_PRO_PRICE_ID", raising=False)
     response = signed_in_for(client, 1).get(
         "/billing/upgrade?installation_id=1", follow_redirects=False
     )
     assert response.status_code == 503
-    assert "trial-only mode" in response.text
+    # Asserting on the substance, not the punctuation: esc() renders an
+    # apostrophe as an entity, which is correct HTML but brittle to match.
+    assert "no Stripe configuration" in response.text
 
 
 def test_exhausted_trial_blocks_further_reviews(client):
@@ -628,7 +880,7 @@ def test_exhausted_trial_blocks_further_reviews(client):
         connection.execute("UPDATE installations SET trial_reviews = 0 WHERE id = 78")
 
     allowed, reason = store.review_allowed(78)
-    assert allowed is False and "Trial exhausted" in reason
+    assert allowed is False and "Choose a Hobby or Pro plan" in reason
 
     # A paid plan lifts the gate.
     import billing

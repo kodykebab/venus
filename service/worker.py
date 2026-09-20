@@ -27,7 +27,10 @@ IDLE_SLEEP_SECONDS = float(os.environ.get("PARACHECK_WORKER_IDLE_SECONDS", "5"))
 # job after STALE_AFTER_SECONDS but the thread would leak without this.
 JOB_TIMEOUT_SECONDS = float(os.environ.get("PARACHECK_JOB_TIMEOUT_SECONDS", "1500"))
 
-HANDLERS = {"review_pull_request": jobs.run_review_job}
+HANDLERS = {
+    "review_pull_request": jobs.run_review_job,
+    "scan_repository": jobs.run_repository_scan,
+}
 
 
 async def run_job(job: job_queue.Job) -> None:

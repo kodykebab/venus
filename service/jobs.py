@@ -219,12 +219,15 @@ def _title_for(findings: list[dict]) -> str:
 
 
 def _summarize(report: dict, changed: list[str], api_key: str | None = None) -> tuple[str | None, str]:
-    """Claude's synthesis when credentials are configured, the deterministic
-    render otherwise. A missing key degrades the review, never breaks it.
+    """Use deterministic rendering unless the future Claude service is enabled.
 
-    `api_key` is the installation's own, so one deployment can serve many
-    accounts each billing their own usage."""
+    The synthesis integration stays in the repository for a later launch, but
+    production cannot accidentally incur Anthropic charges by adding a secret.
+    """
     from render import render_markdown
+
+    if os.environ.get("PARACHECK_CLAUDE_ENABLED", "0").lower() not in ("1", "true", "yes"):
+        return None, render_markdown(report, ", ".join(changed[:3]))
 
     try:
         from synthesize import render_synthesized, synthesize_review
@@ -235,3 +238,139 @@ def _summarize(report: dict, changed: list[str], api_key: str | None = None) -> 
     if synthesized is None:
         return None, render_markdown(report, ", ".join(changed[:3]))
     return synthesized.verdict, render_synthesized(synthesized, ", ".join(changed[:3]))
+
+
+# --- on-demand repository scan ----------------------------------------------
+#
+# The pull-request path only produces value once somebody opens a pull request,
+# which can be days after install. This is the "scan this repo now" button: it
+# analyses the default branch and posts the result as a Check Run on that
+# commit, so a new installation sees what ParaCheck actually does within a
+# minute of connecting a repository.
+
+def checkout_default_branch(full_name: str, token: str, workdir: str) -> tuple[bool, str, str]:
+    """Shallow-clones the default branch. Returns (ok, error, head_sha)."""
+    remote = f"https://x-access-token:{token}@github.com/{full_name}.git"
+
+    ok, err = _run_git(["clone", "--depth", "1", "--quiet", remote, workdir])
+    if not ok:
+        return False, f"could not clone the repository: {err}", ""
+
+    # Read the SHA before dropping the remote, so the Check Run lands on the
+    # exact commit that was analysed rather than whatever is newest later.
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=workdir,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        head_sha = completed.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        head_sha = ""
+
+    _run_git(["remote", "remove", "origin"], cwd=workdir)
+    if not head_sha:
+        return False, "could not determine the default branch head", ""
+    return True, "", head_sha
+
+
+def solidity_files_in(workdir: str) -> list[str]:
+    """Every first-party .sol file in the checkout.
+
+    Dependency directories are skipped here rather than relying on the analyzer
+    to discard them later: on a repo vendoring OpenZeppelin this is the
+    difference between analysing a handful of files and several hundred."""
+    skip = {"lib", "node_modules", "out", "cache", "artifacts", "forge-std", ".git"}
+    found = []
+    for root, directories, files in os.walk(workdir):
+        directories[:] = [d for d in directories if d not in skip and not d.startswith(".")]
+        for name in files:
+            if name.endswith(".sol"):
+                found.append(os.path.relpath(os.path.join(root, name), workdir))
+    return sorted(found)
+
+
+async def run_repository_scan(
+    installation_id: int,
+    full_name: str,
+    min_severity: str = "low",
+    fail_on: str | None = None,
+    chain: str | None = None,
+) -> None:
+    """Scans a repository's default branch on request.
+
+    Quota is checked here as well as at the button, because the job may sit in
+    the queue behind others that used up the week's remaining scans."""
+    allowed, reason = store.review_allowed(installation_id)
+
+    workdir = tempfile.mkdtemp(prefix="paracheck-scan-")
+    async with httpx.AsyncClient(timeout=60) as client:
+        try:
+            token = await installation_token(installation_id, client)
+        except Exception as exc:  # noqa: BLE001
+            print(f"paracheck: could not mint an installation token: {exc}")
+            shutil.rmtree(workdir, ignore_errors=True)
+            return
+
+        try:
+            if not allowed:
+                store.record_scan_outcome(installation_id, full_name, "blocked", reason)
+                return
+
+            ok, error, head_sha = await asyncio.to_thread(
+                checkout_default_branch, full_name, token.token, workdir
+            )
+            if not ok:
+                store.record_scan_outcome(installation_id, full_name, "failed", error)
+                return
+
+            check_run_id = await checks.create_check_run(full_name, head_sha, token, client)
+
+            solidity = await asyncio.to_thread(solidity_files_in, workdir)
+            if not solidity:
+                if check_run_id:
+                    await checks.complete_check_run(
+                        full_name, check_run_id, token, client,
+                        conclusion="neutral",
+                        title="No Solidity found",
+                        summary="This repository has no .sol files outside its dependencies.",
+                    )
+                store.record_scan_outcome(
+                    installation_id, full_name, "empty", "No Solidity files found."
+                )
+                return
+
+            report = _rebase_paths(
+                await asyncio.to_thread(analyze_checkout, workdir, solidity, min_severity, chain),
+                workdir,
+            )
+
+            if report.get("unanalyzable"):
+                message = report.get("reason", "unknown reason")
+                if check_run_id:
+                    await checks.fail_check_run(full_name, check_run_id, token, client, message)
+                store.record_scan_outcome(installation_id, full_name, "failed", message)
+                return
+
+            findings = report.get("findings", [])
+            verdict, summary = _summarize(
+                report, solidity, store.anthropic_key(installation_id)
+            )
+
+            if check_run_id:
+                await checks.complete_check_run(
+                    full_name, check_run_id, token, client,
+                    conclusion=checks.conclusion_for(verdict, findings, fail_on),
+                    title=_title_for(findings),
+                    summary=summary,
+                    annotations=checks.build_annotations(findings, MAX_ANNOTATED_FINDINGS),
+                )
+
+            # Recorded as a review so it counts against the weekly quota and
+            # shows up in history alongside pull-request scans.
+            store.record_review(installation_id, full_name, None, head_sha, verdict, len(findings))
+            store.record_scan_outcome(
+                installation_id, full_name, "done",
+                f"{len(findings)} opportunit{'y' if len(findings) == 1 else 'ies'} found.",
+            )
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)

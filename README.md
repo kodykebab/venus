@@ -68,10 +68,8 @@ every subsequent pull request gets a Check Run with inline annotations on the
 flagged lines. `service/README.md` has the App registration steps and the exact
 permission list; [`DEPLOY.md`](DEPLOY.md) covers running it.
 
-```bash
-docker build -t paracheck .
-fly deploy            # fly.toml is in the repo
-```
+The planned hosted deployment is Cloudflare Pages + Workers + D1, with GitHub
+Actions providing the analyzer runtime. See [DEPLOY.md](DEPLOY.md).
 
 Reviews are queued in the database rather than held in memory, so a restart or
 a redeploy mid-review resumes instead of leaving a pull request without its
@@ -155,7 +153,7 @@ service/               GitHub App: install flow, webhooks, Check Runs, billing
   jobqueue.py, worker.py   durable review queue
   sessions.py              signed proof a browser may view an installation
   ui.py, dashboard.py      landing page and dashboard
-Dockerfile, fly.toml   deployment - see DEPLOY.md
+Dockerfile              local/container analyzer runtime
 .github/actions/analyze  The no-server GitHub Action
 contracts/             Foundry project: NaiveAMM, ShardedAMM, DemoToken + samples
 demo-page/             Static demo page + Vercel live-tx endpoint

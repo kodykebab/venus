@@ -18,9 +18,9 @@ DEFAULT_DB_PATH = os.environ.get("PARACHECK_DB", "paracheck.db")
 # or an abandoned install.
 STATE_TTL_SECONDS = 600
 
-# Free reviews a new installation gets. Interpolated into the schema so the
-# number the landing page advertises can't drift from the number granted.
-TRIAL_REVIEWS = 50
+# New installations are unpaid. Paid plans replenish this balance when Stripe
+# confirms checkout; there is deliberately no free entitlement.
+TRIAL_REVIEWS = 0
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS installations (
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS installations (
     account_type    TEXT NOT NULL DEFAULT 'User',
     active          INTEGER NOT NULL DEFAULT 1,
     trial_reviews   INTEGER NOT NULL DEFAULT {trial_reviews},
-    plan            TEXT NOT NULL DEFAULT 'trial',
+    plan            TEXT NOT NULL DEFAULT 'unpaid',
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
 );
@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 
 CREATE INDEX IF NOT EXISTS reviews_by_installation ON reviews (installation_id, created_at DESC);
+
+-- The state of an on-demand "scan this repo" request. One row per repository:
+-- only the latest attempt matters, and the history of completed scans already
+-- lives in `reviews`.
+CREATE TABLE IF NOT EXISTS scan_status (
+    installation_id INTEGER NOT NULL,
+    full_name       TEXT NOT NULL,
+    state           TEXT NOT NULL,
+    message         TEXT,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (installation_id, full_name)
+);
 """.format(trial_reviews=TRIAL_REVIEWS)
 
 
@@ -226,15 +238,8 @@ def record_review(
             """,
             (installation_id, full_name, pr_number, head_sha, verdict, findings, int(time.time())),
         )
-        # Trial accounts burn one review per run; paid plans are unmetered here.
-        connection.execute(
-            """
-            UPDATE installations
-               SET trial_reviews = MAX(trial_reviews - 1, 0), updated_at = ?
-             WHERE id = ? AND plan = 'trial'
-            """,
-            (int(time.time()), installation_id),
-        )
+        # Nothing is decremented here: quota is counted from these rows, so
+        # inserting one is the whole accounting step.
 
 
 def recent_reviews(installation_id: int, limit: int = 20, db_path: str | None = None) -> list[dict]:
@@ -246,20 +251,97 @@ def recent_reviews(installation_id: int, limit: int = 20, db_path: str | None = 
         return [dict(row) for row in rows]
 
 
+# Quota is a rolling seven-day window, counted from the reviews actually run,
+# rather than a counter granted at checkout and decremented.
+#
+# Counting is what makes the quota correct without a scheduled job and without
+# depending on Stripe telling us a period rolled over: a missed `invoice.paid`
+# used to mean an account was throttled to zero until someone noticed. A rolling
+# window also can't be gamed by waiting for a reset and burning a month's quota
+# in one minute.
+QUOTA_WINDOW_SECONDS = 7 * 24 * 3600
+
+
+def reviews_in_window(installation_id: int, db_path: str | None = None) -> int:
+    since = int(time.time()) - QUOTA_WINDOW_SECONDS
+    with connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) AS n FROM reviews WHERE installation_id = ? AND created_at >= ?",
+            (installation_id, since),
+        ).fetchone()
+        return row["n"]
+
+
+def quota_resets_at(installation_id: int, db_path: str | None = None) -> int | None:
+    """When the next unit frees up: the moment the oldest review in the window
+    ages out of it."""
+    since = int(time.time()) - QUOTA_WINDOW_SECONDS
+    with connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT MIN(created_at) AS oldest FROM reviews "
+            "WHERE installation_id = ? AND created_at >= ?",
+            (installation_id, since),
+        ).fetchone()
+    if row is None or row["oldest"] is None:
+        return None
+    return int(row["oldest"]) + QUOTA_WINDOW_SECONDS
+
+
+def quota_status(installation_id: int, db_path: str | None = None) -> dict:
+    """Everything a dashboard or a check run needs to explain the quota."""
+    import billing
+
+    installation = get_installation(installation_id, db_path)
+    plan = installation["plan"] if installation else "unpaid"
+    limit = billing.review_limit(plan)
+    used = reviews_in_window(installation_id, db_path)
+    return {
+        "plan": plan,
+        "limit": limit,
+        "used": used,
+        "remaining": max(limit - used, 0) if limit is not None else None,
+        "resets_at": quota_resets_at(installation_id, db_path),
+    }
+
+
 def review_allowed(installation_id: int, db_path: str | None = None) -> tuple[bool, str]:
-    """Trial accounts get a fixed number of reviews; paid plans are unlimited.
-    Returns (allowed, reason) so the caller can post a useful check-run message
-    rather than silently doing nothing."""
+    """Only paid installations with quota left in the current window may run."""
+    import billing
+
     installation = get_installation(installation_id, db_path)
     if installation is None:
         return False, "This installation is not registered."
     if not installation["active"]:
         return False, "This installation is no longer active."
-    if installation["plan"] != "trial":
-        return True, ""
-    if installation["trial_reviews"] <= 0:
-        return False, "Trial exhausted - subscribe to keep reviewing pull requests."
+
+    plan = installation["plan"]
+    limit = billing.review_limit(plan)
+    if limit is None:
+        return True, ""  # enterprise: quota is agreed in the contract, not here
+    if limit == 0:
+        # Unpaid, lapsed, or a plan name we don't recognise. Say what to do
+        # rather than reporting a quota of zero, which reads like a bug.
+        return False, "Choose a Hobby or Pro plan to start reviewing pull requests."
+
+    used = reviews_in_window(installation_id, db_path)
+    if used >= limit:
+        resets = quota_resets_at(installation_id, db_path)
+        when = f" Quota frees up in {_until(resets)}." if resets else ""
+        return False, (
+            f"This week's quota is used up ({used}/{limit} scans in the last 7 days).{when}"
+        )
     return True, ""
+
+
+def _until(timestamp: int | None) -> str:
+    if not timestamp:
+        return "a moment"
+    seconds = max(int(timestamp) - int(time.time()), 0)
+    if seconds < 3600:
+        return f"{max(seconds // 60, 1)} minutes"
+    if seconds < 86400:
+        return f"{seconds // 3600} hours"
+    return f"{seconds // 86400} days"
 
 
 # --- per-installation API keys ----------------------------------------------
@@ -291,3 +373,33 @@ def anthropic_key(installation_id: int, db_path: str | None = None) -> str | Non
     if installation is None:
         return None
     return secrets_store.decrypt(installation["anthropic_key"])
+
+
+# --- on-demand scan state ---------------------------------------------------
+
+def record_scan_outcome(
+    installation_id: int, full_name: str, state: str, message: str = "",
+    db_path: str | None = None,
+) -> None:
+    """State of the latest scan request for a repository: queued, done, failed,
+    blocked or empty. Upserted because only the newest attempt is interesting."""
+    with connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO scan_status (installation_id, full_name, state, message, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(installation_id, full_name) DO UPDATE SET
+                state = excluded.state,
+                message = excluded.message,
+                updated_at = excluded.updated_at
+            """,
+            (installation_id, full_name, state, message[:500], int(time.time())),
+        )
+
+
+def scan_statuses(installation_id: int, db_path: str | None = None) -> dict[str, dict]:
+    with connect(db_path) as connection:
+        rows = connection.execute(
+            "SELECT * FROM scan_status WHERE installation_id = ?", (installation_id,)
+        ).fetchall()
+        return {row["full_name"]: dict(row) for row in rows}

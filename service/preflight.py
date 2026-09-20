@@ -51,7 +51,7 @@ def check_private_key() -> Check:
     pem = os.environ.get("GITHUB_APP_PRIVATE_KEY", "")
     if not pem.strip():
         return Check("GITHUB_APP_PRIVATE_KEY", FAIL, "not set - no reviews can be posted",
-                     'fly secrets set GITHUB_APP_PRIVATE_KEY="$(cat your-app.private-key.pem)"')
+                     "set it with your deployment provider's secret manager from the PEM file")
     if "BEGIN" not in pem:
         return Check("GITHUB_APP_PRIVATE_KEY", FAIL, "does not look like a PEM file",
                      "paste the whole .pem, including the BEGIN/END lines")
@@ -152,8 +152,20 @@ def check_billing() -> Check:
                          "subscriptions will never activate",
                          "set it from the Stripe webhook endpoint you created")
         return Check("stripe", OK, "subscriptions enabled")
-    return Check("stripe", WARN, "not configured - everything runs on the free trial",
-                 "optional: set STRIPE_SECRET_KEY, STRIPE_PRICE_ID and STRIPE_WEBHOOK_SECRET")
+    return Check("stripe", FAIL, "not configured - paid reviews cannot start",
+                 "set STRIPE_SECRET_KEY, STRIPE_HOBBY_PRICE_ID, STRIPE_PRO_PRICE_ID and STRIPE_WEBHOOK_SECRET")
+
+
+def check_clerk() -> Check:
+    publishable = _present("CLERK_PUBLISHABLE_KEY")
+    verification = _present("CLERK_JWT_KEY")
+    if publishable and verification:
+        return Check("clerk", OK, "account sign-in enabled")
+    if not publishable and not verification:
+        return Check("clerk", WARN, "not configured - direct GitHub-session checkout remains available",
+                     "set CLERK_PUBLISHABLE_KEY and CLERK_JWT_KEY for account checkout")
+    return Check("clerk", FAIL, "only one Clerk credential is set - checkout sign-in will fail",
+                 "set both CLERK_PUBLISHABLE_KEY and CLERK_JWT_KEY")
 
 
 def run_checks() -> list[Check]:
@@ -167,6 +179,7 @@ def run_checks() -> list[Check]:
         check_database(),
         check_fallback_key(),
         check_billing(),
+        check_clerk(),
     ]
 
 

@@ -1,12 +1,7 @@
-"""Subscription gating via Stripe Checkout.
+"""Paid plan gating via Stripe Checkout.
 
-Deliberately not in the install path: an account starts on a trial so the
-one-click install stays one click and nobody types a card number to finish
-setting up. The gate applies afterwards, when the trial runs out.
-
-Stripe is optional. With no keys configured the service runs in trial-only
-mode - `configured()` is False, checkout returns None, and the dashboard says
-so - rather than failing or pretending an upgrade happened.
+New installations are unpaid until a Hobby or Pro Checkout completes. There
+is no free entitlement and every paid plan has an explicit review quota.
 """
 from __future__ import annotations
 
@@ -21,10 +16,86 @@ import store
 
 STRIPE_API = "https://api.stripe.com/v1"
 SIGNATURE_TOLERANCE_SECONDS = 300
+# Quotas are per rolling 7-day window (see store.QUOTA_WINDOW_SECONDS), not per
+# billing period: a review compiles and analyses an arbitrary repository, so the
+# cost is in CPU and minutes, and it has to be bounded at the rate it is
+# incurred. These numbers are the single source of truth - the pricing page, the
+# dashboard and the check-run messages all read them from here, so they cannot
+# drift apart.
+PLANS = {
+    "hobby": {
+        "price_env": "STRIPE_HOBBY_PRICE_ID",
+        "review_limit": 20,
+        "label": "Hobby",
+        "price": "$9",
+        "cadence": "/month",
+        "blurb": "For a developer keeping one or two contracts honest.",
+        "features": [
+            "20 scans per week",
+            "GitHub PR Check Runs and inline annotations",
+            "Static analysis: Slither + hot-slot classifier",
+            "Dynamic contention analysis",
+        ],
+    },
+    "pro": {
+        "price_env": "STRIPE_PRO_PRICE_ID",
+        "review_limit": 100,
+        "label": "Pro",
+        "price": "$29",
+        "cadence": "/month",
+        "blurb": "For a team shipping to a parallel-execution chain.",
+        "features": [
+            "100 scans per week",
+            "Everything in Hobby",
+            "Unlimited repositories per installation",
+            "Merge gating on severity thresholds",
+        ],
+    },
+}
+
+# Enterprise is sales-led and has no Stripe price: quota is agreed in the
+# contract, so review_limit is None rather than a number we invented.
+ENTERPRISE = {
+    "label": "Enterprise",
+    "review_limit": None,
+    "price": "Custom",
+    "cadence": "",
+    "blurb": "For protocols with their own volume, deployment and support needs.",
+    "features": [
+        "Custom weekly scan quota",
+        "Everything in Pro",
+        "Self-hosted or dedicated deployment options",
+        "Direct support channel",
+    ],
+}
+
+
+def review_limit(plan: str) -> int | None:
+    """Scans permitted per rolling week. None means "no fixed cap" and is only
+    ever enterprise; an unknown or unpaid plan is 0, not unlimited."""
+    if plan == "enterprise":
+        return None
+    details = PLANS.get(plan)
+    return details["review_limit"] if details else 0
+
+
+def plan_details(plan: str) -> dict | None:
+    if plan == "enterprise":
+        return dict(ENTERPRISE)
+    details = PLANS.get(plan)
+    if details is None:
+        return None
+    # An override exists so a deployment can run a promotion without a code
+    # change, but the default is the published price.
+    return {**details, "price": os.environ.get(
+        f"PARACHECK_{plan.upper()}_PRICE", details["price"]
+    )}
 
 
 def configured() -> bool:
-    return bool(os.environ.get("STRIPE_SECRET_KEY") and os.environ.get("STRIPE_PRICE_ID"))
+    return bool(os.environ.get("STRIPE_SECRET_KEY") and all(
+        os.environ.get(details["price_env"]) for details in PLANS.values()
+    ))
 
 
 def _secret_key() -> str:
@@ -33,6 +104,7 @@ def _secret_key() -> str:
 
 async def create_checkout_session(
     installation_id: int,
+    plan: str,
     success_url: str,
     cancel_url: str,
     client: httpx.AsyncClient | None = None,
@@ -41,7 +113,9 @@ async def create_checkout_session(
 
     The installation id rides along in client_reference_id, which is what ties
     the completed payment back to the account that started it."""
-    if not configured():
+    details = plan_details(plan)
+    price_id = os.environ.get(details["price_env"]) if details else None
+    if not os.environ.get("STRIPE_SECRET_KEY") or not price_id:
         return None
 
     owns_client = client is None
@@ -52,9 +126,13 @@ async def create_checkout_session(
             auth=(_secret_key(), ""),
             data={
                 "mode": "subscription",
-                "line_items[0][price]": os.environ["STRIPE_PRICE_ID"],
+                "line_items[0][price]": price_id,
                 "line_items[0][quantity]": "1",
                 "client_reference_id": str(installation_id),
+                "metadata[installation_id]": str(installation_id),
+                "metadata[plan]": plan,
+                "subscription_data[metadata][installation_id]": str(installation_id),
+                "subscription_data[metadata][plan]": plan,
                 "success_url": success_url,
                 "cancel_url": cancel_url,
             },
@@ -107,20 +185,72 @@ def apply_event(event: dict) -> str | None:
         installation_id = data.get("client_reference_id")
         if not installation_id:
             return None
-        set_plan(int(installation_id), "pro")
-        return f"installation {installation_id} upgraded to pro"
+        plan = data.get("metadata", {}).get("plan", "pro")
+        if plan not in PLANS:
+            return None
+        set_plan(int(installation_id), plan)
+        return f"installation {installation_id} upgraded to {plan}"
 
-    if event_type in ("customer.subscription.deleted", "invoice.payment_failed"):
-        installation_id = (data.get("metadata") or {}).get("installation_id")
+    # A renewal re-asserts the plan. Quota is counted per rolling week rather
+    # than granted, so this does not need to replenish anything - it exists so
+    # an account that lapsed and then paid again is restored without waiting for
+    # a new Checkout, and so a missed event can never silently zero an account.
+    if event_type in ("invoice.paid", "invoice.payment_succeeded"):
+        installation_id, plan = _subscription_target(data)
+        if not installation_id or plan not in PLANS:
+            return None
+        set_plan(int(installation_id), plan)
+        return f"installation {installation_id} renewed on {plan}"
+
+    # A plan change mid-cycle: upgrade, downgrade, or a subscription that has
+    # entered a state Stripe no longer considers good standing.
+    if event_type == "customer.subscription.updated":
+        installation_id, plan = _subscription_target(data)
         if not installation_id:
             return None
-        set_plan(int(installation_id), "trial")
-        return f"installation {installation_id} returned to trial"
+        status = data.get("status")
+        if status in ("active", "trialing") and plan in PLANS:
+            set_plan(int(installation_id), plan)
+            return f"installation {installation_id} now on {plan}"
+        if status in ("canceled", "unpaid", "incomplete_expired"):
+            set_plan(int(installation_id), "unpaid")
+            return f"installation {installation_id} returned to unpaid ({status})"
+        return None
+
+    if event_type in ("customer.subscription.deleted", "invoice.payment_failed"):
+        installation_id, _ = _subscription_target(data)
+        if not installation_id:
+            return None
+        set_plan(int(installation_id), "unpaid")
+        return f"installation {installation_id} returned to unpaid"
 
     return None
 
 
+def _subscription_target(data: dict) -> tuple[str | None, str | None]:
+    """Digs the installation and plan out of a Stripe object.
+
+    Subscription events carry our metadata on the subscription; invoice events
+    carry it in `subscription_details`, or on lines when Stripe copied it there.
+    Checking each in turn is what stops a renewal being silently ignored because
+    it arrived in a shape we didn't look at."""
+    candidates = [
+        data.get("metadata") or {},
+        (data.get("subscription_details") or {}).get("metadata") or {},
+    ]
+    for line in ((data.get("lines") or {}).get("data") or []):
+        candidates.append(line.get("metadata") or {})
+
+    for metadata in candidates:
+        installation_id = metadata.get("installation_id")
+        if installation_id:
+            return installation_id, metadata.get("plan")
+    return None, None
+
+
 def set_plan(installation_id: int, plan: str, db_path: str | None = None) -> None:
+    """Records which plan an installation is on. Quota is derived from the plan
+    and the reviews actually run, so there is no balance to write here."""
     with store.connect(db_path) as connection:
         connection.execute(
             "UPDATE installations SET plan = ?, updated_at = ? WHERE id = ?",
@@ -132,8 +262,10 @@ def billing_status(installation_id: int, db_path: str | None = None) -> dict:
     installation = store.get_installation(installation_id, db_path)
     if installation is None:
         return {"plan": "unknown", "configured": configured()}
+    quota = store.quota_status(installation_id, db_path)
     return {
         "plan": installation["plan"],
-        "trialReviewsLeft": installation["trial_reviews"],
+        "quota": quota,
+        "planDetails": plan_details(installation["plan"]),
         "configured": configured(),
     }
