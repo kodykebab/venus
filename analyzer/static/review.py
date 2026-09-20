@@ -17,6 +17,7 @@ from chains import Chain, resolve_chain
 from classify import classify
 from detectors import run_detectors
 from dynamic_review import run_simulation, simulation_findings
+import sandbox
 from project import detect_project, install_dependencies
 from run_slither import (
     UNANALYZABLE_MESSAGE,
@@ -246,7 +247,11 @@ def review_project(
             }
 
     try:
-        slither = Slither(project.root)
+        # crytic-compile shells out to the project's own build system (`forge
+        # build`, `npx hardhat compile`), so this is still running the repo's
+        # tooling - it gets the same scrubbed environment as the install step.
+        with sandbox.scrubbed_environ(project.root):
+            slither = Slither(project.root)
     except Exception as exc:  # noqa: BLE001
         return {
             "unanalyzable": True,
