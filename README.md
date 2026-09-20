@@ -66,7 +66,44 @@ paracheck review . --chain monad --simulate
 [`service/`](service/README.md) is a GitHub App: one click installs it, and
 every subsequent pull request gets a Check Run with inline annotations on the
 flagged lines. `service/README.md` has the App registration steps and the exact
-permission list.
+permission list; [`DEPLOY.md`](DEPLOY.md) covers running it.
+
+```bash
+docker build -t paracheck .
+fly deploy            # fly.toml is in the repo
+```
+
+Reviews are queued in the database rather than held in memory, so a restart or
+a redeploy mid-review resumes instead of leaving a pull request without its
+check. Pushing three times in a row reviews the newest head once. The worker
+runs inside the API process by default and can be split out
+(`PARACHECK_INLINE_WORKER=0`, `python service/worker.py`) when reviews start
+waiting on each other.
+
+### Threat model
+
+Reviewing a pull request means running its build system, and `forge install`
+and `npm install` execute arbitrary code by design. The service is built on the
+assumption that an attacker has code execution inside a review, and tries to
+make that worth nothing:
+
+- Build tools get an allowlisted environment, not the process's own. A
+  `postinstall` script that dumps every `KEY`/`SECRET`/`TOKEN` variable sees
+  `GITHUB_APP_PRIVATE_KEY` and `STRIPE_SECRET_KEY` under a plain `npm install`,
+  and an empty list through a review. The list is an allowlist precisely so the
+  next secret added to a deployment isn't exposed by default.
+- `HOME` points at the disposable checkout, so nothing can write to a cache that
+  a later review reads. The shared solc cache is root-owned and read-only - a
+  compiler a repository could overwrite would be run by every later review -
+  and each review gets a private symlinked copy it may extend.
+- CPU, memory, file size and process count are capped by rlimits, and each build
+  gets its own process group so a timeout collects the whole tree.
+- The container runs as an unprivileged user that owns none of its own code,
+  with a read-only root filesystem and all capabilities dropped.
+
+None of those is sufficient alone, which is why they're layered.
+[`analyzer/static/sandbox.py`](analyzer/static/sandbox.py) is the process half,
+[`Dockerfile`](Dockerfile) the container half.
 
 ## Live demo
 
@@ -95,11 +132,17 @@ analyzer/
     chains.py            which chains actually execute in parallel
     dynamic_review.py    cross-references measurement against prediction
     render.py            deterministic Markdown (the no-API-key path)
+    sandbox.py           runs a reviewed repo's build system as hostile input
+    doctor.py            `paracheck doctor` - toolchain diagnostics
   dynamic/
     simulate.py          fork, deploy, load, trace - the measured layer
     *.ts                 live-chain conflict measurement (Monad demo)
   llm/synthesize.py    Claude turns findings into a prioritized review
 service/               GitHub App: install flow, webhooks, Check Runs, billing
+  jobqueue.py, worker.py   durable review queue
+  sessions.py              signed proof a browser may view an installation
+  ui.py, dashboard.py      landing page and dashboard
+Dockerfile, fly.toml   deployment - see DEPLOY.md
 .github/actions/analyze  The no-server GitHub Action
 contracts/             Foundry project: NaiveAMM, ShardedAMM, DemoToken + samples
 demo-page/             Static demo page + Vercel live-tx endpoint
@@ -128,8 +171,17 @@ A single `paracheck` wrapper at the repo root dispatches to everything else:
 ./paracheck livetx --contract naive --amount 5
 ./paracheck deployment-info --chain-id 10143
 ./paracheck config                                      # show resolved config + where it came from
+./paracheck doctor                                      # check the toolchain
 ./paracheck --help
 ```
+
+`doctor` is the first thing to run if anything behaves strangely. Every
+dependency here fails at a distance - a missing `forge` surfaces as
+crytic-compile's "Cannot execute `forge`", a missing solc as a compile error on
+a file that compiles fine, and no API key as a review that quietly arrives
+without its written summary. It names each one and the command that fixes it,
+and exits non-zero only for failures that actually block a review (`--json` for
+CI).
 
 `review` takes either a file (self-contained, no imports) or a project directory
 (imports resolved, dependencies installed). A bare `.sol` path runs the fast
