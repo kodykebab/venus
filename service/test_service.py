@@ -25,7 +25,9 @@ def isolated_env(monkeypatch):
     monkeypatch.setenv("PARACHECK_INLINE_WORKER", "0")
     # billing holds a module-level reference to store; leaving it cached would
     # leak the previous test's database into the next one.
-    for module in ("store", "app", "jobs", "jobqueue", "worker", "github_auth", "billing"):
+    monkeypatch.setenv("PARACHECK_ENCRYPTION_KEY", "test-encryption-secret")
+    for module in ("store", "app", "jobs", "jobqueue", "worker", "github_auth",
+                   "billing", "sessions", "secrets_store"):
         sys.modules.pop(module, None)
     import jobqueue
     import store
@@ -427,6 +429,149 @@ def test_billing_upgrade_refuses_another_installation(client):
         "/billing/upgrade?installation_id=51", follow_redirects=False
     )
     assert response.status_code == 403
+
+
+# --- bring your own key -------------------------------------------------------
+
+def api_key_form(client, installation_id, **fields):
+    import sessions
+
+    body = {
+        "installation_id": str(installation_id),
+        "csrf": sessions.csrf_token(installation_id),
+        "action": "save",
+        **fields,
+    }
+    return client.post("/settings/api-key", data=body, follow_redirects=False)
+
+
+@pytest.fixture
+def accepts_any_key(monkeypatch):
+    """The key check makes a real API call; these tests are about everything
+    around it."""
+    import app as service_app
+
+    monkeypatch.setattr(service_app, "_check_key", lambda key: (True, ""))
+
+
+def test_a_key_is_stored_encrypted_and_never_shown_again(client, accepts_any_key):
+    import secrets_store
+    import store
+
+    store.upsert_installation(60, "acme", "User")
+    signed_in_for(client, 60)
+
+    assert api_key_form(client, 60, api_key="sk-ant-api03-SUPERSECRET").status_code == 303
+
+    row = store.get_installation(60)
+    assert "SUPERSECRET" not in (row["anthropic_key"] or ""), "stored in the clear"
+    assert secrets_store.decrypt(row["anthropic_key"]) == "sk-ant-api03-SUPERSECRET"
+    assert row["anthropic_key_hint"] == "...CRET"
+
+    page = client.get("/dashboard?installation_id=60").text
+    assert "SUPERSECRET" not in page, "the key was echoed back into the page"
+    assert "...CRET" in page, "no way to tell which key is installed"
+
+
+def test_a_rejected_key_is_not_stored(client, monkeypatch):
+    import app as service_app
+    import store
+
+    store.upsert_installation(61, "acme", "User")
+    signed_in_for(client, 61)
+    monkeypatch.setattr(service_app, "_check_key", lambda key: (False, "rejected"))
+
+    response = api_key_form(client, 61, api_key="sk-ant-bogus")
+    assert "notice=rejected" in response.headers["location"]
+    assert store.anthropic_key(61) is None
+
+
+def test_a_key_can_be_removed(client, accepts_any_key):
+    import store
+
+    store.upsert_installation(62, "acme", "User")
+    signed_in_for(client, 62)
+    api_key_form(client, 62, api_key="sk-ant-something")
+    assert store.anthropic_key(62) is not None
+
+    api_key_form(client, 62, action="remove", api_key="")
+    assert store.anthropic_key(62) is None
+    assert store.get_installation(62)["anthropic_key_hint"] is None
+
+
+def test_setting_a_key_needs_a_session_for_that_installation(client, accepts_any_key):
+    import store
+
+    store.upsert_installation(63, "victim", "User")
+    signed_in_for(client, 99)
+    assert api_key_form(client, 63, api_key="sk-ant-attacker").status_code == 403
+    assert store.anthropic_key(63) is None
+
+
+def test_setting_a_key_needs_the_form_token(client, accepts_any_key):
+    import store
+
+    store.upsert_installation(64, "acme", "User")
+    signed_in_for(client, 64)
+    response = client.post("/settings/api-key", data={
+        "installation_id": "64", "csrf": "forged", "api_key": "sk-ant-x", "action": "save",
+    }, follow_redirects=False)
+    assert response.status_code == 400
+    assert store.anthropic_key(64) is None
+
+
+def test_a_form_token_is_not_valid_for_another_installation(client):
+    import sessions
+
+    assert not sessions.csrf_valid(65, sessions.csrf_token(66))
+    assert sessions.csrf_valid(65, sessions.csrf_token(65))
+
+
+def test_the_notice_cannot_be_used_to_write_into_the_page(client):
+    """The redirect carries a notice name, not text, so a crafted link can't
+    render arbitrary content on somebody's dashboard."""
+    import store
+
+    store.upsert_installation(67, "acme", "User")
+    signed_in_for(client, 67)
+    page = client.get("/dashboard?installation_id=67&notice=<script>alert(1)</script>").text
+    assert "<script>alert(1)</script>" not in page
+
+
+def test_reviews_use_the_installations_own_key(monkeypatch):
+    """One deployment, many accounts, each billing their own usage."""
+    import jobs
+    import store
+
+    store.upsert_installation(68, "acme", "User")
+    store.set_anthropic_key(68, "sk-ant-theirs")
+    assert store.anthropic_key(68) == "sk-ant-theirs"
+
+    seen = {}
+
+    def fake_synthesize(report, api_key=None, **kwargs):
+        seen["api_key"] = api_key
+        return None
+
+    import sys
+    module = type(sys)("synthesize")
+    module.synthesize_review = fake_synthesize
+    module.render_synthesized = lambda *a, **k: ""
+    monkeypatch.setitem(sys.modules, "synthesize", module)
+
+    jobs._summarize({"findings": []}, ["a.sol"], store.anthropic_key(68))
+    assert seen["api_key"] == "sk-ant-theirs"
+
+
+def test_an_unreadable_key_degrades_instead_of_crashing(client, monkeypatch):
+    """Rotating the encryption secret must not make every review throw."""
+    import store
+
+    store.upsert_installation(69, "acme", "User")
+    store.set_anthropic_key(69, "sk-ant-old")
+
+    monkeypatch.setenv("PARACHECK_ENCRYPTION_KEY", "a-different-secret")
+    assert store.anthropic_key(69) is None
 
 
 # --- billing ----------------------------------------------------------------

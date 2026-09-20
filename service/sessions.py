@@ -112,3 +112,21 @@ def set_cookie(response, token: str) -> None:
         secure=public_url.startswith("https://"),
         path="/",
     )
+
+
+def csrf_token(installation_id: int) -> str:
+    """A form token bound to the installation.
+
+    The session cookie is SameSite=lax, which already stops a cross-site POST
+    from carrying it. This is the second lock: it means a form served for one
+    installation cannot be replayed against another, including by someone who
+    legitimately holds a session for both.
+    """
+    message = f"csrf:{installation_id}".encode()
+    return _b64(hmac.new(_secret(), message, hashlib.sha256).digest())
+
+
+def csrf_valid(installation_id: int, token: str | None) -> bool:
+    if not token:
+        return False
+    return hmac.compare_digest(token, csrf_token(installation_id))

@@ -4,6 +4,17 @@ The service is one container: a FastAPI app that receives GitHub webhooks and a
 worker that drains the review queue. By default they share a process, so there
 is one thing to deploy.
 
+## Checking what's missing
+
+```bash
+paracheck doctor --service          # or: docker exec <container> python service/preflight.py
+```
+
+It names every variable, what breaks without it, and which are optional. Run it
+after setting secrets and before pointing GitHub at the deployment - most of
+these fail late and quietly otherwise (a private key mangled by a secrets UI
+looks set and fails at the first token mint, inside a background job).
+
 ## What it needs
 
 | Secret | Where it comes from | Used for |
@@ -13,7 +24,8 @@ is one thing to deploy.
 | `GITHUB_WEBHOOK_SECRET` | whatever you set in the App's webhook config | verifying every delivery |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | same page | the OAuth step during install |
 | `PARACHECK_PUBLIC_URL` | your deployed URL | building callback URLs |
-| `ANTHROPIC_API_KEY` | console.anthropic.com | synthesized review prose (optional - without it reviews are rendered deterministically) |
+| `ANTHROPIC_API_KEY` | console.anthropic.com | optional fallback key. Installations normally supply their own on the dashboard, billed to their own account; this covers any that haven't |
+| `PARACHECK_ENCRYPTION_KEY` | generate one | encrypts the API keys installations supply. Falls back to `GITHUB_WEBHOOK_SECRET` |
 | `STRIPE_SECRET_KEY` / `STRIPE_PRICE_ID` / `STRIPE_WEBHOOK_SECRET` | Stripe dashboard | paid plans (optional - without them everything runs on the free tier) |
 
 ## Fly.io

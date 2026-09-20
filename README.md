@@ -80,6 +80,19 @@ runs inside the API process by default and can be split out
 (`PARACHECK_INLINE_WORKER=0`, `python service/worker.py`) when reviews start
 waiting on each other.
 
+### Who supplies the Claude key
+
+Installations bring their own, on the dashboard. It's checked against the
+Anthropic API before being stored, encrypted at rest with a secret the database
+doesn't contain, never logged, never echoed back into the page, and never put
+in the environment the reviewed repository's build tools inherit - it's passed
+to the SDK directly and never enters `os.environ` at all. Usage is billed to
+their account.
+
+A deployment-wide `ANTHROPIC_API_KEY` still works and covers any installation
+without its own, which is what a single-tenant deploy wants. Reviews run either
+way; without a key they arrive rendered from the findings rather than written.
+
 ### Threat model
 
 Reviewing a pull request means running its build system, and `forge install`
@@ -174,6 +187,9 @@ A single `paracheck` wrapper at the repo root dispatches to everything else:
 ./paracheck doctor                                      # check the toolchain
 ./paracheck --help
 ```
+
+`doctor --service` checks a deployment's configuration instead of the local
+toolchain - every variable, what breaks without it, and which are optional.
 
 `doctor` is the first thing to run if anything behaves strangely. Every
 dependency here fails at a distance - a missing `forge` surfaces as

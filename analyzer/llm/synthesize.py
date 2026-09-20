@@ -64,6 +64,39 @@ def credentials_available() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
+def check_key(api_key: str, model: str = MODEL) -> tuple[bool, str]:
+    """Verifies a key by actually calling the API, cheaply.
+
+    Worth the round trip: a key is pasted once and then used by a background
+    job, so an unverified bad key surfaces days later as reviews that silently
+    arrive without their summary. Telling someone at the moment they paste it
+    is the difference between a typo and a support thread.
+
+    Deliberately not a format check - a well-formed revoked key looks fine.
+    """
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        client.messages.create(
+            model=model,
+            max_tokens=1,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    except anthropic.AuthenticationError:
+        return False, "That key was rejected by the Anthropic API."
+    except anthropic.PermissionDeniedError:
+        return False, "That key is valid but not permitted to use this model."
+    except anthropic.RateLimitError:
+        # The key authenticated - that is what we were checking.
+        return True, ""
+    except anthropic.APIStatusError as exc:
+        return False, f"The Anthropic API returned {exc.status_code} while checking that key."
+    except anthropic.APIConnectionError:
+        return False, "Could not reach the Anthropic API to check that key."
+    return True, ""
+
+
 def _build_user_message(report: dict, diff: str | None, source: str | None) -> str:
     parts = []
     if diff:
@@ -94,19 +127,25 @@ def synthesize_review(
     source: str | None = None,
     model: str = MODEL,
     client=None,
+    api_key: str | None = None,
 ) -> SynthesizedReview | None:
     """Returns a prioritized review, or None if synthesis is unavailable.
+
+    `api_key` is the installation's own key when the service is running
+    bring-your-own-key; without one it falls back to the process environment, so
+    a single-tenant deployment still works with nothing but ANTHROPIC_API_KEY set.
 
     None is a normal outcome (no credentials, API failure) - callers fall back to
     deterministic rendering rather than failing the run."""
     if report.get("unanalyzable"):
         return None
-    if client is None and not credentials_available():
+    if client is None and not api_key and not credentials_available():
         return None
 
     import anthropic  # imported lazily so the analyzers work without the SDK installed
 
-    client = client or anthropic.Anthropic()
+    if client is None:
+        client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
 
     try:
         response = client.messages.parse(

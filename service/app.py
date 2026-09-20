@@ -14,12 +14,13 @@ import os
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import billing
 import dashboard as pages
 import jobqueue as job_queue
+import secrets_store
 import sessions
 import store
 import ui
@@ -238,7 +239,9 @@ def landing() -> HTMLResponse:
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request, installation_id: int | None = None) -> HTMLResponse:
+def dashboard(
+    request: Request, installation_id: int | None = None, notice: str | None = None
+) -> HTMLResponse:
     if installation_id is None:
         return HTMLResponse(pages.no_installation(), status_code=400)
 
@@ -263,7 +266,66 @@ def dashboard(request: Request, installation_id: int | None = None) -> HTMLRespo
         reviews=store.recent_reviews(installation_id, 25),
         queue=queue,
         settings=_settings(),
+        csrf=sessions.csrf_token(installation_id),
+        notice=NOTICES.get(notice),
     ))
+
+
+# Kept server-side and referenced by name, so the redirect after saving a key
+# can't be turned into a way to render arbitrary text on someone's dashboard.
+NOTICES = {
+    "saved": ("ok", "Key saved and verified against the Anthropic API."),
+    "removed": ("ok", "Key removed. Reviews will be rendered from findings."),
+    "rejected": ("error", "That key was rejected by the Anthropic API and has not been saved."),
+    "unavailable": ("error", "This deployment can't store keys: no encryption secret is configured."),
+    "missing": ("error", "No key was submitted."),
+}
+
+
+@app.post("/settings/api-key")
+async def set_api_key(
+    request: Request,
+    installation_id: int = Form(...),
+    csrf: str = Form(""),
+    api_key: str = Form(""),
+    action: str = Form("save"),
+) -> RedirectResponse:
+    """Stores an installation's own Anthropic key.
+
+    The plaintext exists only for the length of this request: it is checked
+    against the API, encrypted, and never logged or echoed back. The redirect
+    carries a notice name rather than any part of the key."""
+    if not _may_view(request, installation_id):
+        return HTMLResponse(pages.not_your_installation(), status_code=403)
+    if not sessions.csrf_valid(installation_id, csrf):
+        raise HTTPException(status_code=400, detail="Stale form - reload the dashboard.")
+
+    back = f"/dashboard?installation_id={installation_id}"
+
+    if action == "remove":
+        store.set_anthropic_key(installation_id, None)
+        return RedirectResponse(f"{back}&notice=removed", status_code=303)
+
+    api_key = api_key.strip()
+    if not api_key:
+        return RedirectResponse(f"{back}&notice=missing", status_code=303)
+    if not secrets_store.available():
+        return RedirectResponse(f"{back}&notice=unavailable", status_code=303)
+
+    ok, _reason = await asyncio.to_thread(_check_key, api_key)
+    if not ok:
+        return RedirectResponse(f"{back}&notice=rejected", status_code=303)
+
+    store.set_anthropic_key(installation_id, api_key)
+    return RedirectResponse(f"{back}&notice=saved", status_code=303)
+
+
+def _check_key(api_key: str) -> tuple[bool, str]:
+    try:
+        from synthesize import check_key
+    except ImportError:
+        return False, "The synthesis module isn't installed on this deployment."
+    return check_key(api_key)
 
 
 def _may_view(request: Request, installation_id: int) -> bool:
@@ -277,6 +339,7 @@ def _settings() -> dict:
         "min_severity": MIN_SEVERITY,
         "fail_on": FAIL_ON,
         "billing": billing.configured(),
+        "byok": secrets_store.available(),
         "inline_worker": INLINE_WORKER,
         "llm": _llm_configured(),
     }

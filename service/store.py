@@ -72,9 +72,25 @@ def connect(db_path: str | None = None):
         connection.close()
 
 
+# Columns added after the first release. SQLite has no "ADD COLUMN IF NOT
+# EXISTS", so they are applied by inspecting the table - an existing deployment
+# must survive a redeploy without a manual migration step.
+ADDED_COLUMNS = {
+    "installations": {
+        "anthropic_key": "TEXT",       # encrypted; see secrets_store.py
+        "anthropic_key_hint": "TEXT",  # last 4 characters, for the dashboard
+    },
+}
+
+
 def init_db(db_path: str | None = None) -> None:
     with connect(db_path) as connection:
         connection.executescript(SCHEMA)
+        for table, columns in ADDED_COLUMNS.items():
+            existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+            for column, definition in columns.items():
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 # --- OAuth CSRF state -------------------------------------------------------
@@ -244,3 +260,34 @@ def review_allowed(installation_id: int, db_path: str | None = None) -> tuple[bo
     if installation["trial_reviews"] <= 0:
         return False, "Trial exhausted - subscribe to keep reviewing pull requests."
     return True, ""
+
+
+# --- per-installation API keys ----------------------------------------------
+
+def set_anthropic_key(
+    installation_id: int, key: str | None, db_path: str | None = None
+) -> None:
+    """Stores an installation's Anthropic key, encrypted, or clears it when
+    given None. The plaintext is never written anywhere - not to the database,
+    not to a log line."""
+    import secrets_store
+
+    encrypted = secrets_store.encrypt(key) if key else None
+    hint = secrets_store.hint(key) if key else None
+    with connect(db_path) as connection:
+        connection.execute(
+            "UPDATE installations SET anthropic_key = ?, anthropic_key_hint = ?, "
+            "updated_at = ? WHERE id = ?",
+            (encrypted, hint, int(time.time()), installation_id),
+        )
+
+
+def anthropic_key(installation_id: int, db_path: str | None = None) -> str | None:
+    """The decrypted key for a review job, or None to fall back to the
+    deployment's own credentials."""
+    import secrets_store
+
+    installation = get_installation(installation_id, db_path)
+    if installation is None:
+        return None
+    return secrets_store.decrypt(installation["anthropic_key"])

@@ -21,6 +21,7 @@ COMMANDS
   livetx                   Fire one live transaction against a deployed contract
   deployment-info          Write demo-page/reports/deployment.json from the latest deploy
   doctor                   Check the toolchain and report what's missing
+                           (--service checks a deployment's configuration)
   config                   Print the resolved configuration and exit
   help                     Show this help
 
@@ -182,6 +183,10 @@ export PATH="$FOUNDRY_BIN:$SCRIPT_DIR/$PY_VENV/bin:$PATH"
 
 if [ "$1" = "doctor" ]; then
   shift
+  if [ "${1:-}" = "--service" ]; then
+    shift
+    exec "$SCRIPT_DIR/$PY_VENV/bin/python3" "$SCRIPT_DIR/service/preflight.py" "$@"
+  fi
   exec "$SCRIPT_DIR/$PY_VENV/bin/python3" "$SCRIPT_DIR/analyzer/static/doctor.py" "$@"
 elif [ "$1" = "review" ]; then
   shift

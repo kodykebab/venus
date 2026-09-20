@@ -194,7 +194,7 @@ async def run_review_job(
                 return
 
             findings = report.get("findings", [])
-            verdict, summary = _summarize(report, changed)
+            verdict, summary = _summarize(report, changed, store.anthropic_key(installation_id))
 
             await checks.complete_check_run(
                 full_name, check_run_id, token, client,
@@ -218,9 +218,12 @@ def _title_for(findings: list[dict]) -> str:
     return f"{len(findings)} finding(s): " + ", ".join(parts)
 
 
-def _summarize(report: dict, changed: list[str]) -> tuple[str | None, str]:
+def _summarize(report: dict, changed: list[str], api_key: str | None = None) -> tuple[str | None, str]:
     """Claude's synthesis when credentials are configured, the deterministic
-    render otherwise. A missing key degrades the review, never breaks it."""
+    render otherwise. A missing key degrades the review, never breaks it.
+
+    `api_key` is the installation's own, so one deployment can serve many
+    accounts each billing their own usage."""
     from render import render_markdown
 
     try:
@@ -228,7 +231,7 @@ def _summarize(report: dict, changed: list[str]) -> tuple[str | None, str]:
     except ImportError:
         return None, render_markdown(report, ", ".join(changed[:3]))
 
-    synthesized = synthesize_review(report)
+    synthesized = synthesize_review(report, api_key=api_key)
     if synthesized is None:
         return None, render_markdown(report, ", ".join(changed[:3]))
     return synthesized.verdict, render_synthesized(synthesized, ", ".join(changed[:3]))

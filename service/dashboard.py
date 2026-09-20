@@ -135,6 +135,8 @@ def installation_page(
     reviews: list[dict],
     queue: dict,
     settings: dict,
+    csrf: str = "",
+    notice: tuple[str, str] | None = None,
 ) -> str:
     plan = installation["plan"]
     upgrade = (
@@ -144,6 +146,7 @@ def installation_page(
     body = "".join([
         _header(installation, installation_id),
         _summary(repos, reviews, queue),
+        _api_key(installation, installation_id, settings, csrf, notice),
         _repositories(repos, reviews, installation_id),
         _history(reviews),
         _deployment(settings),
@@ -154,6 +157,62 @@ def installation_page(
         nav=f'<a href="https://github.com/settings/installations/{ui.esc(installation_id)}">'
             f'Manage access</a>{upgrade}',
     )
+
+
+def _api_key(installation: dict, installation_id: int, settings: dict,
+             csrf: str, notice) -> str:
+    """Where an installation supplies its own Anthropic key.
+
+    Written to be read by someone deciding whether to paste a live billing
+    credential into a web form, so it says plainly what happens to it.
+    """
+    if not settings["byok"]:
+        return ""
+
+    banner = ""
+    if notice:
+        tone, message = notice
+        colour = "var(--good)" if tone == "ok" else "var(--accent)"
+        banner = (f'<div class="card card-pad" style="margin-bottom:14px;border-color:{colour}">'
+                  f'{ui.esc(message)}</div>')
+
+    hint = installation["anthropic_key_hint"]
+    if hint:
+        state = f'<span class="chip good">Key installed &middot; <code>{ui.esc(hint)}</code></span>'
+        action = ("Replace it by pasting a new one, or remove it to go back to plain "
+                  "rendered reviews.")
+        remove = (f'<button class="btn ghost" name="action" value="remove" type="submit">'
+                  f'Remove key</button>')
+    else:
+        state = '<span class="chip">No key &middot; reviews are rendered from findings</span>'
+        action = ("Add one and reviews get a written summary that prioritises the findings "
+                  "instead of listing them.")
+        remove = ""
+
+    return ui.section("Claude API key", f"""
+      {banner}
+      <div class="card card-pad">
+        <p style="margin-top:0">{state}</p>
+        <p class="muted small">{ui.esc(action)}</p>
+        <form method="post" action="/settings/api-key" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+          <input type="hidden" name="installation_id" value="{ui.esc(installation_id)}">
+          <input type="hidden" name="csrf" value="{ui.esc(csrf)}">
+          <input type="password" name="api_key" placeholder="sk-ant-..." autocomplete="off"
+                 spellcheck="false"
+                 style="flex:1;min-width:260px;padding:10px 12px;border:1px solid var(--rule);
+                        border-radius:5px;background:var(--bg);color:var(--ink);
+                        font-family:'IBM Plex Mono',monospace;font-size:13px">
+          <button class="btn" name="action" value="save" type="submit">Save key</button>
+          {remove}
+        </form>
+        <p class="muted small" style="margin-bottom:0;margin-top:14px">
+          The key is checked against the Anthropic API before it is stored, encrypted at
+          rest with a secret that isn't in the database, and never written to a log or
+          passed to the build tools that run your repository's code. Usage is billed to
+          your own Anthropic account. Reviews keep working without one - they just arrive
+          without the written summary.
+        </p>
+      </div>""")
 
 
 def _header(installation: dict, installation_id: int) -> str:
