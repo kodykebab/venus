@@ -1,4 +1,4 @@
-name: ParaCheck Analyze (sample contract)
+name: ParaCheck Review (sample contract)
 
 # Dogfoods .github/actions/analyze against contracts/samples/StakingPoolSample.sol on every
 # PR that touches it - also serves as the reference example for using this action in any
@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - "contracts/samples/StakingPoolSample.sol"
+      - "analyzer/static/**"
       - ".github/actions/analyze/**"
       - ".github/workflows/paracheck-analyze.yml"
   workflow_dispatch: {} # Actions tab -> this workflow -> "Run workflow", no PR needed
@@ -17,7 +18,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  analyze:
+  review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,4 +26,10 @@ jobs:
       - uses: ./.github/actions/analyze
         with:
           contract-path: contracts/samples/StakingPoolSample.sol
-          fail-below-score: "" # report-only for this example; set e.g. "50" to block low-score PRs
+          min-severity: low
+          # Report-only for this example. Set fail-on: high to block PRs that
+          # introduce a high-severity finding.
+          fail-on: ""
+          # Optional: without it the action still posts a review, just rendered
+          # from the raw findings instead of synthesized by Claude.
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

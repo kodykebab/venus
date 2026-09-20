@@ -13,13 +13,28 @@ USAGE
   paracheck [global options] <command> [command options]
 
 COMMANDS
-  <file>.sol               Analyze a single, importless Solidity file
+  review <file>.sol        Full review: parallelism + Slither's detector suite,
+                           synthesized into a prioritized write-up by Claude
+  <file>.sol               Parallelism analysis only (fast, JSON out)
   analyze                  Regenerate demo-page static reports for NaiveAMM/ShardedAMM
   loadtest                 Fire concurrent swaps, measure real on-chain conflicts
   livetx                   Fire one live transaction against a deployed contract
   deployment-info          Write demo-page/reports/deployment.json from the latest deploy
   config                   Print the resolved configuration and exit
   help                     Show this help
+
+REVIEW OPTIONS  (paracheck review <file>.sol ...)
+  --solc PATH               Explicit solc binary
+  --diff FILE                Unified diff, so the review is scoped to the change
+  --min-severity S           Drop findings below this severity
+                             (critical|high|medium|low|info|optimization)
+  --fail-on S                Exit 1 if any finding is at or above this severity
+  --json                      Emit the raw report instead of Markdown
+  --no-llm                    Skip Claude synthesis, render findings directly
+  --out FILE                  Write to a file instead of stdout
+
+  Synthesis needs ANTHROPIC_API_KEY (or an \`ant auth login\` profile). Without
+  credentials the command still works - it renders the findings directly.
 
 FILE ANALYSIS OPTIONS  (paracheck <file>.sol ...)
   --solc PATH               Explicit solc binary (default: solc-select's active version)
@@ -57,6 +72,8 @@ CONFIGURATION
   Run \`paracheck config\` to see exactly what's resolved and where it came from.
 
 EXAMPLES
+  paracheck review contracts/samples/StakingPoolSample.sol
+  paracheck review MyContract.sol --fail-on high --diff pr.diff
   paracheck contracts/samples/StakingPoolSample.sol
   paracheck loadtest --chain-id 10143 --traders 5 --bands 3
   paracheck livetx --contract naive --amount 5
@@ -162,7 +179,10 @@ fi
 
 export PATH="$FOUNDRY_BIN:$SCRIPT_DIR/$PY_VENV/bin:$PATH"
 
-if [[ "$1" == *.sol ]]; then
+if [ "$1" = "review" ]; then
+  shift
+  exec "$SCRIPT_DIR/$PY_VENV/bin/python3" "$SCRIPT_DIR/analyzer/static/review_cli.py" "$@"
+elif [[ "$1" == *.sol ]]; then
   SOL_FILE="$1"
   shift
   exec "$SCRIPT_DIR/$PY_VENV/bin/python3" "$SCRIPT_DIR/analyzer/static/analyze_file.py" "$SOL_FILE" "$@"

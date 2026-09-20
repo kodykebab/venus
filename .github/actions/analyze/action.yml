@@ -1,23 +1,41 @@
-name: "ParaCheck Analyze"
+name: "ParaCheck Review"
 description: >-
-  Runs ParaCheck's static parallelism-conflict classifier against a single, self-contained
-  Solidity file (no imports) and posts a summary comment on the pull request.
+  Reviews a Solidity file with ParaCheck's parallelism-conflict classifier plus
+  Slither's full detector suite, synthesizes the findings into a prioritized
+  review with Claude, and posts it as a pull request comment.
 author: "kodykebab"
 
 inputs:
   contract-path:
-    description: "Path to a single, self-contained Solidity file (no imports) to analyze."
+    description: "Path to a single, self-contained Solidity file (no imports) to review."
     required: true
-  fail-below-score:
+  fail-on:
     description: >-
-      Fail the job if any analyzed contract's parallelism score is below this threshold
-      (0-100). Leave empty to never fail - report only.
+      Fail the job if any finding is at or above this severity
+      (critical|high|medium|low|info|optimization). Empty means never fail.
     required: false
     default: ""
+  fail-below-score:
+    description: >-
+      Fail the job if any contract's parallelism score is below this threshold
+      (0-100). Empty means never fail.
+    required: false
+    default: ""
+  min-severity:
+    description: "Drop findings below this severity from the review entirely."
+    required: false
+    default: "low"
   comment-on-pr:
-    description: "Post a summary comment on the pull request (only applies in a pull_request run)."
+    description: "Post the review as a pull request comment (pull_request runs only)."
     required: false
     default: "true"
+  anthropic-api-key:
+    description: >-
+      Enables Claude synthesis - the findings get turned into a prioritized,
+      plain-English review instead of a raw table. Without it the action still
+      works and posts the findings directly.
+    required: false
+    default: ""
   github-token:
     description: "Token used to post the PR comment. Defaults to the workflow's own GITHUB_TOKEN."
     required: false
@@ -25,8 +43,8 @@ inputs:
 
 outputs:
   report-json:
-    description: "The raw JSON report ({unanalyzable, contracts: [...]})."
-    value: ${{ steps.analyze.outputs.report }}
+    description: "The raw report: {unanalyzable, contracts, findings, summary}."
+    value: ${{ steps.review.outputs.report }}
 
 runs:
   using: "composite"
@@ -40,30 +58,40 @@ runs:
       shell: bash
       run: pip install -q -r "${{ github.action_path }}/../../../analyzer/static/requirements.txt"
 
-    - name: Run static analysis
-      id: analyze
+    - name: Run review
+      id: review
       shell: bash
       run: |
         set -euo pipefail
-        SOLC_BIN="${{ github.action_path }}/../../../demo-page/api/_analyzer/solc-linux-amd64"
+        ROOT="${{ github.action_path }}/../../../"
+        SOLC_BIN="$ROOT/demo-page/api/_analyzer/solc-linux-amd64"
         chmod +x "$SOLC_BIN"
-        REPORT=$(python3 "${{ github.action_path }}/../../../analyzer/static/analyze_file.py" \
-          "${{ inputs.contract-path }}" --solc "$SOLC_BIN")
-        echo "$REPORT"
+
+        python3 "$ROOT/analyzer/static/review_cli.py" \
+          "${{ inputs.contract-path }}" \
+          --solc "$SOLC_BIN" \
+          --min-severity "${{ inputs.min-severity }}" \
+          --out "$RUNNER_TEMP/review.md" \
+          --json-out "$RUNNER_TEMP/report.json"
+
+        cat "$RUNNER_TEMP/review.md"
         {
           echo "report<<PARACHECK_REPORT_EOF"
-          echo "$REPORT"
+          cat "$RUNNER_TEMP/report.json"
           echo "PARACHECK_REPORT_EOF"
         } >> "$GITHUB_OUTPUT"
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
 
-    - name: Evaluate result and comment on PR
+    - name: Comment on PR and apply gates
       shell: bash
       run: python3 "${{ github.action_path }}/post_comment.py"
       env:
-        REPORT_JSON: ${{ steps.analyze.outputs.report }}
+        REVIEW_MARKDOWN_FILE: ${{ runner.temp }}/review.md
+        REPORT_JSON_FILE: ${{ runner.temp }}/report.json
+        FAIL_ON: ${{ inputs.fail-on }}
         FAIL_BELOW_SCORE: ${{ inputs.fail-below-score }}
         COMMENT_ON_PR: ${{ inputs.comment-on-pr }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
-        CONTRACT_PATH: ${{ inputs.contract-path }}
