@@ -2,6 +2,8 @@
 contracts/out/
 contracts/cache/
 contracts/lib/
+contracts/.svm/
+contracts/.foundry/
 contracts/broadcast/*/31337/
 contracts/broadcast/*/10143/dry-run/
 
