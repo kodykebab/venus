@@ -276,6 +276,35 @@ export async function completeScan(
     .run();
 }
 
+/**
+ * How long a scan may sit in `running` before it is presumed dead.
+ *
+ * The workflow times out at 20 minutes, so anything past 30 never reported
+ * back: the runner was cancelled, killed, or the job crashed before its final
+ * step. Without a bound, such a scan stays "Scanning..." on the dashboard
+ * forever AND is found by openScanFor, which would dedupe every later scan of
+ * that pull request against a run that is never coming back - silently
+ * preventing that PR from ever being scanned again.
+ */
+export const STALE_SCAN_SECONDS = 30 * 60;
+
+/**
+ * Marks abandoned runs as failed. Cheap enough to call on a dashboard load,
+ * which is also exactly when someone is looking at a stuck one.
+ */
+export async function reapStaleScans(db: D1Database, accountId: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE scans
+          SET state = 'failed',
+              message = 'The workflow run stopped without reporting a result.',
+              completed_at = ?
+        WHERE account_id = ? AND state IN ('queued', 'running') AND created_at < ?`,
+    )
+    .bind(now(), accountId, now() - STALE_SCAN_SECONDS)
+    .run();
+}
+
 /** An in-flight scan for this pull request, so a re-push supersedes rather than queues again. */
 export async function openScanFor(
   db: D1Database,
@@ -289,9 +318,10 @@ export async function openScanFor(
        WHERE installation_id = ? AND repository = ?
          AND (pull_request IS ? OR pull_request = ?)
          AND state IN ('queued', 'running')
+         AND created_at >= ?
        ORDER BY created_at DESC LIMIT 1`,
     )
-    .bind(installationId, repository, pullRequest, pullRequest)
+    .bind(installationId, repository, pullRequest, pullRequest, now() - STALE_SCAN_SECONDS)
     .first<Scan>();
 }
 

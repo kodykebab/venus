@@ -204,6 +204,10 @@ async function finishInstall(url: URL, env: Env): Promise<Response> {
 // --- dashboard data ---------------------------------------------------------
 
 async function me(env: Env, session: Session): Promise<Response> {
+  // A run that died without reporting would otherwise show "Scanning..."
+  // forever and block later scans of the same pull request.
+  await db.reapStaleScans(env.DB, session.accountId);
+
   const account = await db.getAccount(env.DB, session.accountId);
   const installations = await db.installationsForAccount(env.DB, session.accountId);
   const quota = await db.quotaFor(env.DB, account);
