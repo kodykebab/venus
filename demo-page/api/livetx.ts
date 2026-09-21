@@ -72,6 +72,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       status: receipt.status,
     });
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    // Never echo the raw error: ethers' network-error objects can embed the
+    // request URL - which for a provider like QuickNode carries an auth
+    // token in the path - and this endpoint is unauthenticated and public.
+    // Full detail goes to the server's own logs (Vercel captures console.error
+    // privately); the caller gets a message with no credential in it.
+    console.error("livetx failed:", err);
+    const message = err instanceof Error ? err.message : String(err);
+    const safe = /quiknode|alchemy|infura|ankr|[?&]key=|api[_-]?key/i.test(message)
+      ? "The transaction could not be completed. Try again in a moment."
+      : message;
+    res.status(500).json({ error: safe });
   }
 }

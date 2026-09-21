@@ -43,7 +43,7 @@ jobs:
         with:
           # Where your contracts live. The whole project is compiled so imports
           # resolve; in a pull request the findings are scoped to what changed.
-          target: "."
+          target: "contracts"
           # The chain you deploy to. Parallelism findings are only reported for
           # chains that actually execute in parallel.
           chain: monad

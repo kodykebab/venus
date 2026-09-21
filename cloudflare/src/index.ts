@@ -486,7 +486,7 @@ async function checkout(request: Request, env: Env, session: Session): Promise<R
   }
   const { plan } = (await request.json().catch(() => ({}))) as { plan?: string };
   if (!plan || !PURCHASABLE.includes(plan as never)) {
-    return json({ error: "choose the Hobby or Pro plan" }, 400);
+    return json({ error: "choose the Pro or Team plan" }, 400);
   }
 
   const url = await stripe.createCheckoutSession(env, {
