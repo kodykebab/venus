@@ -34,3 +34,4 @@ paracheck.db
 web/.next/
 web/out/
 .deploy-secrets.env
+.paracheck-app-key.pem

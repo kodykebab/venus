@@ -15,7 +15,7 @@ ENVIRONMENT = "production"
 # Identifiers, not secrets. The Clerk secret key is set with `wrangler secret`.
 CLERK_ISSUER = ""
 CLERK_AUDIENCE = ""
-GITHUB_APP_SLUG = "paracheck-ci"
+GITHUB_APP_SLUG = "paracheck"
 PUBLIC_URL = "https://paracheck-web.kritarthshankr.workers.dev"
 ENTERPRISE_SALES_EMAIL = "kritarthshankr@gmail.com"
 

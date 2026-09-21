@@ -20,15 +20,55 @@ const headers = (token: string) => ({
   "x-github-api-version": "2022-11-28",
 });
 
-/** PKCS#8 PEM -> a WebCrypto signing key. */
+/** Minimal DER: wrap `content` in a tag with a correctly encoded length. */
+function derTagged(tag: number, content: Uint8Array): Uint8Array {
+  let length: number[];
+  if (content.length < 0x80) {
+    length = [content.length];
+  } else {
+    const bytes: number[] = [];
+    for (let n = content.length; n > 0; n = Math.floor(n / 256)) bytes.unshift(n % 256);
+    length = [0x80 | bytes.length, ...bytes];
+  }
+  return new Uint8Array([tag, ...length, ...content]);
+}
+
+/**
+ * PKCS#1 -> PKCS#8.
+ *
+ * GitHub hands out "BEGIN RSA PRIVATE KEY", which is PKCS#1. WebCrypto only
+ * imports PKCS#8, so without this every GitHub App key ever issued would be
+ * rejected - and the symptom is an opaque DataError at the first token mint,
+ * long after the key looked fine in the config.
+ *
+ * The conversion is pure structure: PKCS#8 is a SEQUENCE of a version, the
+ * rsaEncryption algorithm identifier, and the original PKCS#1 DER as an OCTET
+ * STRING. No key material changes.
+ */
+function pkcs1ToPkcs8(pkcs1: Uint8Array): Uint8Array {
+  const version = [0x02, 0x01, 0x00];
+  // AlgorithmIdentifier: OID 1.2.840.113549.1.1.1 (rsaEncryption), NULL params.
+  const algorithm = [
+    0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86,
+    0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
+  ];
+  const wrapped = derTagged(0x04, pkcs1);
+  const body = new Uint8Array([...version, ...algorithm, ...wrapped]);
+  return derTagged(0x30, body);
+}
+
+/** A PEM in either shape -> a WebCrypto signing key. */
 async function importPrivateKey(pem: string): Promise<CryptoKey> {
+  const isPkcs1 = pem.includes("BEGIN RSA PRIVATE KEY");
   const body = pem
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "")
     .replace(/-----END [A-Z ]*PRIVATE KEY-----/, "")
     .replace(/\s+/g, "");
+
+  const der = b64decode(body);
   return crypto.subtle.importKey(
     "pkcs8",
-    b64decode(body),
+    isPkcs1 ? pkcs1ToPkcs8(der) : der,
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["sign"],
