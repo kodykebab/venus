@@ -1,198 +1,212 @@
-# Deploying ParaCheck on Cloudflare
+# Deploying ParaCheck
 
-ParaCheck's launch architecture is Cloudflare plus GitHub Actions:
-
-- Cloudflare Pages hosts the static demo in `demo-page/`.
-- A Cloudflare Worker owns Clerk, Stripe, GitHub webhook, quota, and D1 control-plane work.
-- GitHub Actions runs Foundry, solc, Slither, and ParaCheck against the repository.
-- Claude is disabled for launch with `PARACHECK_CLAUDE_ENABLED=0`.
-
-The Worker scaffold lives in `cloudflare/`. It currently typechecks and has a
-health endpoint, but its payment/webhook routes intentionally return `501` until
-the control plane is implemented.
-
-## 1. Prerequisites
-
-Install and authenticate the tools:
-
-```bash
-npm install
-npm install -g wrangler
-wrangler login
+```
+Cloudflare Pages            Next.js app (marketing + dashboard), Clerk sign-in
+        |
+        v  fetch with a Clerk token
+Cloudflare Worker           identity, billing, quota, webhooks  ->  D1 + Queues
+        |
+        v  queue consumer
+Cloudflare Container        git clone, Foundry, solc, Slither  ->  GitHub Check Run
 ```
 
-You also need accounts for:
+The Worker is the control plane and never compiles anything. The container is
+the only part that sees customer source.
 
-- Cloudflare Pages, Workers, and D1.
-- Clerk for account authentication.
-- Stripe for paid plans and webhooks.
-- A GitHub App for repository installation/webhooks.
+Containers and Queues both require a **paid Workers plan**.
 
-Do not paste private keys, API secrets, or webhook secrets into chat or commit
-them to the repository. Enter them directly when Wrangler prompts for them.
+---
 
-## 2. Cloudflare Pages
+## 1. Accounts and secrets you need first
 
-Deploy the static demo first:
+| Where | What | Notes |
+| --- | --- | --- |
+| Cloudflare | account + paid Workers plan | Containers and Queues are not on the free plan |
+| GitHub | a GitHub App | created in step 5, after you know your Worker URL |
+| Clerk | an application | publishable key (public) + secret key |
+| Stripe | two recurring Prices | $9/month and $29/month |
+| Anthropic | nothing | customers bring their own key; you never pay for inference |
 
-```bash
-cd demo-page
-npx wrangler pages project create paracheck-demo
-npx wrangler pages deploy . --project-name paracheck-demo
-```
+---
 
-Alternatively connect the repository in the Cloudflare Pages dashboard. Use
-`demo-page` as the build output directory; it is already static and needs no
-build command.
-
-## 3. Cloudflare Worker and D1
+## 2. Cloudflare resources
 
 ```bash
 cd cloudflare
 npm install
-npx wrangler d1 create paracheck
+npx wrangler login
+
+# D1
+npx wrangler d1 create paracheck          # copy the database_id into wrangler.toml
+npm run db:remote                         # applies schema.sql
+
+# Queues
+npx wrangler queues create paracheck-scans
+npx wrangler queues create paracheck-scans-dlq
 ```
 
-Copy the returned database id into `cloudflare/wrangler.toml`, then initialize
-local and remote schemas:
+Set `database_id` in `wrangler.toml` to the id D1 printed, and `PUBLIC_URL` to
+the domain the Next.js app will be served from.
 
-```bash
-npx wrangler d1 execute paracheck --local --file=schema.sql
-npx wrangler d1 execute paracheck --remote --file=schema.sql
-npx wrangler dev
-```
+---
 
-The current scaffold is not production-ready yet. `/healthz` reports
-`ready: false`; `/checkout`, `/github/webhook`, and `/stripe/webhook` return
-`501` until implemented.
-
-## 4. Keys and where to get them
-
-### Clerk
-
-From the Clerk Dashboard:
-
-- `CLERK_PUBLISHABLE_KEY`: public browser key, usually starts with `pk_live_`.
-- `CLERK_JWT_KEY`: server-side verification key from the Clerk JWT template.
-- `CLERK_ISSUER`: issuer URL from that JWT template.
-- `CLERK_AUDIENCE`: the audience configured for the template.
-
-Only the publishable key belongs in browser-facing configuration. Put the JWT
-verification key in Worker secrets with `wrangler secret put`.
-
-### Stripe
-
-From the Stripe Dashboard:
-
-- `STRIPE_SECRET_KEY`: server secret key.
-- `STRIPE_HOBBY_PRICE_ID`: recurring Price for Hobby.
-- `STRIPE_PRO_PRICE_ID`: recurring Price for Pro.
-- `STRIPE_WEBHOOK_SECRET`: signing secret for the Worker webhook endpoint.
-
-Use the agreed launch prices only after creating the corresponding recurring
-Prices in Stripe:
-
-- Hobby: `$9/month`, 20 reviews.
-- Pro: `$29/month`, 100 reviews.
-- Enterprise: custom, handled through the mailto form.
-
-Configure Stripe events for:
-
-- `checkout.session.completed`
-- `invoice.paid`
-- `customer.subscription.deleted`
-- `invoice.payment_failed`
-
-### GitHub App
-
-From GitHub App settings:
-
-- `GITHUB_APP_ID`: numeric App ID.
-- `GITHUB_APP_PRIVATE_KEY`: generated PEM private key.
-- `GITHUB_WEBHOOK_SECRET`: webhook signing secret.
-- `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`: OAuth credentials if the setup flow uses GitHub OAuth.
-
-The App needs least-privilege access to repository contents, pull requests, and
-checks. The Worker must verify GitHub signatures before parsing webhook bodies.
-
-### Enterprise
-
-Set `ENTERPRISE_SALES_EMAIL` to the inbox that should receive the browser
-`mailto:` Enterprise enquiry. No SMTP service is required.
-
-### Claude
-
-Do not configure these for launch:
-
-```env
-PARACHECK_CLAUDE_ENABLED=0
-ANTHROPIC_API_KEY=
-```
-
-## 5. Set Worker secrets
-
-From `cloudflare/`, run each command directly and enter the value at the prompt:
-
-```bash
-npx wrangler secret put CLERK_JWT_KEY
-npx wrangler secret put CLERK_ISSUER
-npx wrangler secret put CLERK_AUDIENCE
-npx wrangler secret put GITHUB_APP_ID
-npx wrangler secret put GITHUB_APP_PRIVATE_KEY
-npx wrangler secret put GITHUB_WEBHOOK_SECRET
-npx wrangler secret put STRIPE_SECRET_KEY
-npx wrangler secret put STRIPE_HOBBY_PRICE_ID
-npx wrangler secret put STRIPE_PRO_PRICE_ID
-npx wrangler secret put STRIPE_WEBHOOK_SECRET
-npx wrangler secret put ENTERPRISE_SALES_EMAIL
-```
-
-Never put these values in `wrangler.toml`, `schema.sql`, GitHub commits, or
-client-side JavaScript.
-
-## 6. GitHub Actions execution
-
-The current `.github/actions/analyze` is a composite action. A customer
-repository needs a workflow that invokes it. The initial rollout can provide a
-copy-paste workflow file.
-
-The full GitHub App experience still needs the Worker to:
-
-1. Receive and verify the installation webhook.
-2. Mint an installation token.
-3. Create or update the ParaCheck workflow in selected repositories.
-4. Dispatch or respond to pull-request workflow events.
-5. Decrement quota atomically in D1 before dispatch.
-6. Restore quota if dispatch fails.
-
-Do not advertise automatic installation until this private-repository flow is
-end-to-end tested.
-
-## 7. Deploy
-
-Only after the Worker implementation is complete and `ready` is true:
+## 3. Worker secrets
 
 ```bash
 cd cloudflare
-npm run typecheck
-npx wrangler d1 execute paracheck --remote --file=schema.sql
+for s in CLERK_SECRET_KEY GITHUB_APP_ID GITHUB_WEBHOOK_SECRET \
+         GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET \
+         STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
+         STRIPE_HOBBY_PRICE_ID STRIPE_PRO_PRICE_ID ENCRYPTION_KEY; do
+  npx wrangler secret put "$s"
+done
+
+# From the file, not pasted as one line - a PEM mangled into literal \n looks
+# set and then fails at the first token mint, inside a queue consumer.
+npx wrangler secret put GITHUB_APP_PRIVATE_KEY < your-app.private-key.pem
+```
+
+`ENCRYPTION_KEY` is yours to generate and encrypts customers' Anthropic keys at
+rest: `openssl rand -base64 32`. **Rotating it makes every stored key
+unreadable** — scans keep working, they just fall back to deterministic
+findings until each customer re-enters a key.
+
+---
+
+## 4. Deploy the Worker and container
+
+`wrangler deploy` builds `Dockerfile.analyzer`, pushes it to Cloudflare's
+registry and rolls out the Worker together:
+
+```bash
+cd cloudflare
 npx wrangler deploy
+curl https://<your-worker>.workers.dev/api/health
 ```
 
-Then configure:
+`/api/health` names anything still unconfigured. It should report
+`{"ok": true, "missing": []}` before you point GitHub at it.
 
-- Clerk allowed origins and redirects for the Pages/Worker domains.
-- GitHub App webhook URL: `https://YOUR_WORKER_DOMAIN/github/webhook`.
-- Stripe webhook URL: `https://YOUR_WORKER_DOMAIN/stripe/webhook`.
-- The Pages frontend's API origin to the Worker domain.
+---
 
-## Cost guardrails
+## 5. The GitHub App
 
-- Keep Claude disabled.
-- Use fixed Hobby/Pro review quotas.
-- Reject reviews when quota is exhausted.
-- Deduplicate Stripe and GitHub webhook event IDs in D1.
-- Treat GitHub Actions minutes as a potentially variable cost and document who
-  pays for private-repository Actions usage.
-- Do not delete or replace the analyzer action until a private-repository test
-  passes end to end.
+Create it at **Settings → Developer settings → GitHub Apps → New**.
+
+| Field | Value |
+| --- | --- |
+| Homepage URL | your Pages URL |
+| Callback URL | `https://<worker>/api/install/callback` |
+| Setup URL | `https://<worker>/api/install/callback` |
+| Request user authorization (OAuth) during installation | **on** |
+| Webhook URL | `https://<worker>/api/webhooks/github` |
+| Webhook secret | the same value you set as `GITHUB_WEBHOOK_SECRET` |
+
+Repository permissions: **Contents: read**, **Pull requests: read**, **Checks:
+read & write**, **Metadata: read**.
+Subscribe to: **Installation**, **Installation repositories**, **Pull request**.
+
+Put the App's slug in `wrangler.toml` as `GITHUB_APP_SLUG`, then redeploy.
+
+---
+
+## 6. Stripe
+
+Create one product with two recurring monthly Prices — $9 (Hobby) and $29 (Pro)
+— and set their ids as `STRIPE_HOBBY_PRICE_ID` / `STRIPE_PRO_PRICE_ID`.
+
+Add a webhook endpoint at `https://<worker>/api/webhooks/stripe` subscribed to:
+
+```
+checkout.session.completed
+invoice.paid
+invoice.payment_failed
+customer.subscription.updated
+customer.subscription.deleted
+```
+
+The signing secret is `STRIPE_WEBHOOK_SECRET`.
+
+The **amounts in Stripe are not read by the app** — the published prices live in
+`cloudflare/src/plans.ts` and `web/lib/plans.ts`. If you change one, change all
+three, or the page advertises a price the card is not charged.
+
+---
+
+## 7. Clerk
+
+Create an application, then set:
+
+- `CLERK_SECRET_KEY` as a Worker secret
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` as a Pages build variable
+
+In Clerk, add your Pages domain to the allowed origins. If you pin `iss`/`aud`,
+set `CLERK_ISSUER` / `CLERK_AUDIENCE` in `wrangler.toml`; leave them empty
+otherwise — an empty string would be compared literally and reject every token.
+
+---
+
+## 8. The Next.js app on Pages
+
+```bash
+cd web
+npm install
+npm run build          # static export into web/out
+npx wrangler pages deploy out --project-name paracheck
+```
+
+Build-time variables:
+
+| Variable | Value |
+| --- | --- |
+| `NEXT_PUBLIC_API_URL` | your Worker's URL |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
+| `NEXT_PUBLIC_SALES_EMAIL` | where Enterprise enquiries go |
+| `NEXT_PUBLIC_SITE_URL` | the Pages URL, for metadata |
+
+These are compiled into the bundle, so a change needs a rebuild, and none of
+them may be a secret.
+
+---
+
+## 9. Check it end to end
+
+1. `GET /api/health` → `{"ok": true}`.
+2. Sign in on the site; the dashboard loads and shows no plan.
+3. Subscribe with Stripe test card `4242 4242 4242 4242`; the plan appears.
+4. **Connect GitHub**, install on one repository.
+5. **Scan now** on that repository → a Check Run appears on the default branch.
+6. Open a pull request touching a `.sol` file → a Check Run appears on the PR.
+7. Exhaust the weekly quota and confirm the refusal says when it frees up.
+
+---
+
+## Security notes worth keeping
+
+Analysing a repository means running its build system, and `forge install` and
+`npm install` execute arbitrary code by design. Three layers, none sufficient
+alone:
+
+- **Egress allowlist** (`cloudflare/src/analyzer.ts`) — container internet
+  access is off by default and only the hosts a Solidity toolchain needs are
+  reachable. A script that steals a secret has nowhere to send it. Widening
+  `allowedHosts` widens exactly this.
+- **Process sandbox** (`analyzer/static/sandbox.py`) — build tools get an
+  allowlisted environment rather than the process's own, `HOME` points at the
+  disposable checkout, and CPU, memory, file size and process count are capped.
+- **Image** (`Dockerfile.analyzer`) — unprivileged user owning none of its own
+  code, read-only compiler cache owned by root.
+
+Quota is counted from the `scans` table over a rolling seven days rather than
+granted at checkout. There is no balance to replenish, so a missed recurring
+Stripe event cannot leave a paying account throttled to zero.
+
+## Known gaps
+
+- Nothing here has run against a deployed Worker, a real Clerk session or a
+  real Stripe checkout.
+- The image pre-caches solc 0.8.19, 0.8.20, 0.8.24 and 0.8.28. Foundry resolves
+  the newest version matching a project's pragma and downloads anything else on
+  first use; that path needs verifying on real amd64 hardware.
+- `service/` still contains the previous FastAPI control plane. It is no longer
+  the deployment target and can be deleted once the Worker is proven.
