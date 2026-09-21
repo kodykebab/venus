@@ -325,9 +325,6 @@ export async function openScanFor(
     .first<Scan>();
 }
 
-export async function supersedeScan(db: D1Database, id: string, headSha: string): Promise<void> {
-  await db.prepare("UPDATE scans SET head_sha = ? WHERE id = ?").bind(headSha, id).run();
-}
 
 /**
  * A recent scan of this exact commit, in any state - not just in-flight ones.

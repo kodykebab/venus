@@ -344,7 +344,16 @@ async function githubWebhook(
   }
 
   const event = request.headers.get("x-github-event") ?? "";
-  const payload = JSON.parse(body) as GithubPayload;
+  let payload: GithubPayload;
+  try {
+    payload = JSON.parse(body) as GithubPayload;
+  } catch {
+    // The signature check already proved this came from GitHub - malformed
+    // JSON past that point is still a client-side problem, not ours, and
+    // deserves a 400, not the unhandled-exception 500 this used to fall
+    // through to.
+    return json({ error: "malformed payload" }, 400);
+  }
 
   // Acknowledge fast; GitHub times out at 10 seconds and the work is queued.
   ctx.waitUntil(handleGithubEvent(env, event, payload));
@@ -403,56 +412,21 @@ async function handleGithubEvent(
     return;
   }
 
-  if (event === "pull_request") {
-    if (!["opened", "synchronize", "reopened"].includes(payload.action ?? "")) return;
-    await queuePullRequestScan(env, installationId, payload);
-  }
-}
-
-async function queuePullRequestScan(
-  env: Env,
-  installationId: number,
-  payload: GithubPayload,
-): Promise<void> {
-  const repository = payload.repository?.full_name;
-  const pullRequest = payload.pull_request?.number;
-  const headSha = payload.pull_request?.head?.sha;
-  if (!repository || !pullRequest || !headSha) return;
-
-  const installation = await db.getInstallation(env.DB, installationId);
-  // An installation nobody has signed in for has no account to bill, so there
-  // is nothing to spend and nothing to scan.
-  if (!installation?.account_id || !installation.active) return;
-
-  const account = await db.getAccount(env.DB, installation.account_id);
-  const verdict = decide(await db.quotaFor(env.DB, account));
-  if (!verdict.allowed) {
-    // Recorded, not silently dropped: the dashboard has to be able to say why
-    // a pull request never got a check.
-    await db.createScan(env.DB, {
-      id: crypto.randomUUID(),
-      account_id: installation.account_id,
-      installation_id: installationId,
-      repository,
-      pull_request: pullRequest,
-      head_sha: headSha,
-      trigger: "pull_request",
-      state: "blocked",
-    });
-    return;
-  }
-
-  // Three pushes in a row should scan the newest head once, not queue three
-  // scans of commits nobody is waiting on any more.
-  const existing = await db.openScanFor(env.DB, installationId, repository, pullRequest);
-  if (existing) {
-    await db.supersedeScan(env.DB, existing.id, headSha);
-    return;
-  }
-
-  // Nothing is queued here. The customer's workflow fires on its own
-  // `pull_request` trigger and claims a scan when it starts, which is also the
-  // only way a run that we did not dispatch still gets counted.
+  // pull_request itself needs no handler. That surprises anyone reading this
+  // expecting a queue-dispatch model, so it is worth being explicit about why:
+  // this webhook delivery and the customer's own Actions trigger are two
+  // independent deliveries of the same GitHub event, racing each other with no
+  // ordering guarantee. An earlier version of this function used the webhook
+  // to pre-record a scan and supersede it on later pushes - which, once
+  // claimRun became the sole place a scan is actually created, meant a
+  // quota-exhausted PR got two "blocked" rows instead of one (both this
+  // function and claimRun independently checked quota and recorded it), and
+  // worse: a push arriving while an earlier commit's job was still analysing
+  // could rewrite that in-flight scan's head_sha to the newer commit, so its
+  // result would land in history attributed to code that was never actually
+  // built. claimRun already handles quota, dedup and blocked-recording
+  // correctly and is the only thing that knows what was actually analysed;
+  // nothing here should duplicate or race against it.
 }
 
 // --- Stripe webhook ---------------------------------------------------------
@@ -631,16 +605,21 @@ async function claimRun(request: Request, env: Env): Promise<Response> {
   if (!verdict.allowed) {
     // Recorded as blocked so the dashboard can explain why a pull request has
     // no check on it, but blocked scans do not count against the window.
+    // completeScan follows createScan immediately: createScan alone has no
+    // "message" parameter, and without one the dashboard's history shows a
+    // blank reason for a state whose entire purpose is to explain itself.
+    const blockedId = crypto.randomUUID();
     await db.createScan(env.DB, {
-      id: crypto.randomUUID(),
+      id: blockedId,
       account_id: owner.accountId,
       installation_id: owner.installationId,
       repository: identity.repository,
       pull_request: pullRequest,
       head_sha: headSha,
-      trigger: "pull_request",
+      trigger: pullRequest ? "pull_request" : "manual",
       state: "blocked",
     });
+    await db.completeScan(env.DB, blockedId, "blocked", { message: verdict.reason });
     return json({ allowed: false, reason: verdict.reason, quota: verdict.quota }, 402);
   }
 
