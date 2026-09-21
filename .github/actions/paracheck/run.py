@@ -37,6 +37,26 @@ from server import (  # noqa: E402
     summarize,
 )
 
+
+def rebase_to_workspace(paths: list[str], root: str, workspace: str) -> list[str]:
+    """Turns paths relative to `root` (== target, e.g. "contracts/") into paths
+    relative to `workspace` (the repository root).
+
+    review_project documents that every finding is always re-anchored to the
+    repository root, specifically so the same finding has the same path
+    whether analysis runs from the repo root or a subdirectory. Handing it
+    target-relative paths as `changed_files` meant nothing ever matched:
+    every real finding was silently scoped away, for every project whose
+    target is a subdirectory, always - confirmed live: a scan of this
+    project's own flagship demo contracts (NaiveAMM, ShardedAMM) reported
+    zero findings against real, reproducible hot-slot writes.
+
+    The PR-triggered branch never had this bug: GitHub's pulls API already
+    returns repo-root-relative filenames, so those needed no rebasing. Only
+    the default-branch / "Scan now" path, via solidity_files(), did.
+    """
+    return [os.path.relpath(os.path.join(root, path), workspace) for path in paths]
+
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info", "optimization"]
 
 
@@ -147,6 +167,7 @@ def main() -> int:
             print("ParaCheck: no .sol files found outside dependencies.")
             report("empty", message="No Solidity files found.")
             return 0
+        scoped = rebase_to_workspace(scoped, root, workspace)
 
     check_run_id = create_check_run(repository, head_sha, token) if head_sha else None
 
