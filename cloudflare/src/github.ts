@@ -424,7 +424,19 @@ export async function proposeWorkflowFile(
     // The file already exists on this branch from an earlier partial attempt,
     // or on the target branch itself - either way there's nothing more to add.
     if (fileResponse.status !== 422) {
-      return { ok: false, reason: `Could not add the workflow file (${fileResponse.status}).` };
+      const detail = await fileResponse.text().catch(() => "");
+      console.log(`proposeWorkflowFile: contents PUT -> ${fileResponse.status} ${detail.slice(0, 300)}`);
+      // Committing under .github/workflows/ needs the App's dedicated Workflows
+      // permission - Contents:write alone is refused with a 403. This is the
+      // one that trips people up: the branch is created (that only needs
+      // Contents) and then the workflow file itself is rejected.
+      const hint =
+        fileResponse.status === 403
+          ? " Adding a file under .github/workflows/ needs the GitHub App's Workflows permission" +
+            " (write), which is separate from Contents. Grant it, approve the update on the" +
+            " installation, then try again."
+          : "";
+      return { ok: false, reason: `Could not add the workflow file (${fileResponse.status}).${hint}` };
     }
   }
 

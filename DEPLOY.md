@@ -139,15 +139,25 @@ Create at **github.com/settings/apps/new**.
 | Where can this be installed | **Any account** |
 
 Repository permissions: **Contents** read & write · **Metadata** read · **Pull
-requests** read & write · **Checks** read & write · **Actions** read & write.
+requests** read & write · **Workflows** read & write · **Checks** read & write ·
+**Actions** read & write.
 
-Contents and Pull requests need **write**, not read: the "Add workflow" button
-opens a pull request that adds `.github/workflows/paracheck.yml`, which means
-creating a branch, committing a file and opening the PR. With read-only on
-either, branch creation returns 403 and no PR is ever created. (Actions write is
-what lets the Scan now button dispatch a workflow.) Changing these after the App
-exists requires each installer to approve the new permissions on their
-installation before a token carries them.
+The "Add workflow" button opens a pull request that adds
+`.github/workflows/paracheck.yml`, which means creating a branch, committing a
+file and opening the PR. That needs three write scopes, and missing any one
+fails a different step:
+
+- **Contents: write** — create the branch and commit. Read-only fails at branch
+  creation (403), before anything exists.
+- **Workflows: write** — *separately required to commit any file under
+  `.github/workflows/`.* Contents:write alone is not enough; GitHub rejects the
+  file commit with a 403 ("without `workflows` permission"). This is the easy
+  one to miss: the branch is created, then the workflow file is refused.
+- **Pull requests: write** — open the PR itself.
+
+(Actions write is what lets the Scan now button dispatch a workflow.) Changing
+any of these after the App exists requires each installer to approve the new
+permissions on their installation before a token carries them.
 
 Subscribe to: **Pull request**. `Installation` and `Installation repositories`
 are delivered to Apps automatically and are not in the subscribe list.
