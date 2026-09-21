@@ -1,27 +1,63 @@
 name = "paracheck-control-plane"
 main = "src/index.ts"
 compatibility_date = "2026-09-21"
+compatibility_flags = ["nodejs_compat"]
+
+# The control plane. It owns identity, billing, quota and state, and it never
+# compiles anything: repository analysis runs in the container below, which is
+# the only thing here that touches customer source.
 
 [vars]
 ENVIRONMENT = "production"
-DEMO_ORIGIN = "https://static-ruby-psi.vercel.app"
-# Set these to the values from the Clerk JWT template. They are identifiers,
-# not secrets; the Clerk private/secret key must never be placed here.
-CLERK_JWKS_URL = ""
+# Identifiers, not secrets. The Clerk secret key is set with `wrangler secret`.
 CLERK_ISSUER = ""
 CLERK_AUDIENCE = ""
+GITHUB_APP_SLUG = "paracheck-ci"
+PUBLIC_URL = "https://paracheck.dev"
+ENTERPRISE_SALES_EMAIL = ""
 
 [[d1_databases]]
 binding = "DB"
 database_name = "paracheck"
 database_id = "96a48c1d-101b-45de-8e53-23a0846afc5e"
 
-# Secrets are set with `wrangler secret put`, never committed:
-# CLERK_JWT_KEY
-# CLERK_ISSUER
-# CLERK_AUDIENCE
-# GITHUB_APP_ID
-# GITHUB_APP_PRIVATE_KEY
-# GITHUB_WEBHOOK_SECRET
-# STRIPE_WEBHOOK_SECRET
-# ENTERPRISE_SALES_EMAIL
+# Scans are queued rather than run inside the webhook request: GitHub wants a
+# fast 2xx, and an analysis takes minutes. A queue also gives us retries and
+# survives a deploy mid-scan.
+[[queues.producers]]
+binding = "SCANS"
+queue = "paracheck-scans"
+
+[[queues.consumers]]
+queue = "paracheck-scans"
+max_batch_size = 1          # one scan per invocation; they are not cheap
+max_retries = 3
+dead_letter_queue = "paracheck-scans-dlq"
+
+# The analyzer container: Foundry, solc, Slither and the ParaCheck analyzer.
+[[containers]]
+class_name = "Analyzer"
+image = "../Dockerfile.analyzer"
+instance_type = "standard"  # 4 GiB / 1 vCPU - solc needs room on real projects
+max_instances = 20
+
+[[durable_objects.bindings]]
+name = "ANALYZER"
+class_name = "Analyzer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Analyzer"]
+
+# Secrets, set with `wrangler secret put` and never committed:
+#   CLERK_SECRET_KEY        verifying Clerk sessions
+#   GITHUB_APP_ID
+#   GITHUB_APP_PRIVATE_KEY  PEM, signs the App JWT
+#   GITHUB_WEBHOOK_SECRET   HMAC over every delivery
+#   GITHUB_CLIENT_ID
+#   GITHUB_CLIENT_SECRET
+#   STRIPE_SECRET_KEY
+#   STRIPE_WEBHOOK_SECRET
+#   STRIPE_HOBBY_PRICE_ID
+#   STRIPE_PRO_PRICE_ID
+#   ENCRYPTION_KEY          encrypts stored Anthropic keys at rest

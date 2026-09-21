@@ -131,15 +131,27 @@ def check_database() -> Check:
     return Check("database", OK, path)
 
 
-def check_fallback_key() -> Check:
-    """Optional by design: installations bring their own. A deployment key is
-    the single-tenant shortcut."""
-    if _present("ANTHROPIC_API_KEY"):
-        return Check("ANTHROPIC_API_KEY", OK, "set - used when an installation has no key of its own")
-    return Check("ANTHROPIC_API_KEY", WARN,
-                 "not set - installations without their own key get reviews rendered "
-                 "from findings, with no written summary",
-                 "optional: set one to cover every installation from this deployment")
+def check_claude() -> Check:
+    """Off for launch. When it is off, an Anthropic key does nothing, and
+    telling an operator to set one would send them to buy credit they cannot
+    spend - so the check reports the flag, not the key."""
+    enabled = os.environ.get("PARACHECK_CLAUDE_ENABLED", "0").lower() in ("1", "true", "yes")
+    key_present = _present("ANTHROPIC_API_KEY")
+
+    if not enabled:
+        detail = "off - findings are deterministic, no Anthropic calls are made"
+        if key_present:
+            return Check("claude synthesis", WARN,
+                         detail + ", but ANTHROPIC_API_KEY is set and unused",
+                         "unset ANTHROPIC_API_KEY, or set PARACHECK_CLAUDE_ENABLED=1 to use it")
+        return Check("claude synthesis", OK, detail)
+
+    if key_present:
+        return Check("claude synthesis", OK, "enabled, with a deployment-wide key")
+    return Check("claude synthesis", WARN,
+                 "enabled, but no deployment key - only installations that supply "
+                 "their own get written summaries",
+                 "optional: set ANTHROPIC_API_KEY to cover every installation")
 
 
 def check_billing() -> Check:
@@ -154,6 +166,38 @@ def check_billing() -> Check:
         return Check("stripe", OK, "subscriptions enabled")
     return Check("stripe", FAIL, "not configured - paid reviews cannot start",
                  "set STRIPE_SECRET_KEY, STRIPE_HOBBY_PRICE_ID, STRIPE_PRO_PRICE_ID and STRIPE_WEBHOOK_SECRET")
+
+
+def check_enterprise_contact() -> Check:
+    """Enterprise is sales-led, so the address is the whole funnel: without it
+    the pricing page shows a tier nobody can act on."""
+    email = os.environ.get("ENTERPRISE_SALES_EMAIL", "").strip()
+    if not email:
+        return Check("enterprise contact", WARN,
+                     "not set - the Enterprise tier has nowhere to send an enquiry",
+                     "set ENTERPRISE_SALES_EMAIL to the address that should receive them")
+    if "@" not in email:
+        return Check("enterprise contact", FAIL, f"{email!r} is not an email address",
+                     "set ENTERPRISE_SALES_EMAIL to a real mailbox")
+    return Check("enterprise contact", OK, email)
+
+
+def check_plan_prices() -> Check:
+    """Every paid plan needs a Stripe Price, and the two must correspond: a
+    Price whose amount disagrees with the published page is a support ticket
+    waiting to happen, and only the operator can confirm it."""
+    import billing
+
+    missing = [d["price_env"] for d in billing.PLANS.values() if not _present(d["price_env"])]
+    if missing:
+        return Check("plan prices", FAIL, f"no Stripe Price for {', '.join(missing)}",
+                     "create a recurring Price per plan in Stripe and set each id here")
+    published = ", ".join(
+        f"{d['label']} {billing.plan_details(k)['price']}{d['cadence']}"
+        f" / {d['review_limit']} scans per week"
+        for k, d in billing.PLANS.items()
+    )
+    return Check("plan prices", OK, f"{published} - confirm the Stripe amounts match")
 
 
 def check_clerk() -> Check:
@@ -177,9 +221,11 @@ def run_checks() -> list[Check]:
         check_public_url(),
         check_encryption(),
         check_database(),
-        check_fallback_key(),
+        check_claude(),
         check_billing(),
+        check_plan_prices(),
         check_clerk(),
+        check_enterprise_contact(),
     ]
 
 

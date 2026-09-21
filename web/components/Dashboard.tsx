@@ -1,0 +1,402 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+
+import { api, ApiError, type Me, type Quota, type Scan } from "@/lib/api";
+import { PLANS } from "@/lib/plans";
+import { ago, Badge, EmptyState, Notice, Panel, Section, Stat, until, type Tone } from "./ui";
+import { AnthropicKeyPanel } from "./AnthropicKeyPanel";
+
+/**
+ * The dashboard.
+ *
+ * style.md 30 and 48: it answers "how are my contracts doing?", and each
+ * surface has exactly one dominant action. Unpaid, that action is choosing a
+ * plan; paid, it is scanning a repository.
+ */
+
+const SCAN_STATE: Record<string, { label: string; tone: Tone }> = {
+  queued: { label: "Queued", tone: "accent" },
+  running: { label: "Scanning", tone: "accent" },
+  done: { label: "Scanned", tone: "ok" },
+  empty: { label: "No Solidity", tone: "" },
+  failed: { label: "Failed", tone: "critical" },
+  blocked: { label: "Not run", tone: "warn" },
+};
+
+export function Dashboard() {
+  const [me, setMe] = useState<Me | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [scanning, setScanning] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setMe(await api<Me>("/api/me"));
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load your account.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // While anything is in flight, poll: a scan finishing is the whole point of
+  // the page, and making someone refresh to see it would be a poor tell.
+  const inFlight = me?.scans.some((s) => s.state === "queued" || s.state === "running") ?? false;
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+  }, [inFlight, load]);
+
+  async function scan(installationId: number, repository: string) {
+    setScanning(repository);
+    setNotice(null);
+    setError(null);
+    try {
+      await api("/api/scans", { method: "POST", body: { installationId, repository } });
+      setNotice(
+        "Scanning. The result appears here and as a check on the commit, usually within a couple of minutes.",
+      );
+      await load();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not start that scan.");
+    } finally {
+      setScanning(null);
+    }
+  }
+
+  async function connectGithub() {
+    const { url } = await api<{ url: string }>("/api/install?format=json");
+    window.location.href = url;
+  }
+
+  if (error && !me) {
+    return (
+      <Section eyebrow="Dashboard" first>
+        <EmptyState
+          heading="Could not load your account"
+          body={error}
+          action={
+            <button className="btn" type="button" onClick={() => void load()}>
+              Try again
+            </button>
+          }
+        />
+      </Section>
+    );
+  }
+
+  if (!me) {
+    return (
+      <Section eyebrow="Dashboard" first>
+        <Panel>
+          <p className="muted">Loading your account&hellip;</p>
+        </Panel>
+      </Section>
+    );
+  }
+
+  const paid = me.quota.limit === null || (me.quota.limit ?? 0) > 0;
+  const canScan = me.quota.limit === null || (me.quota.remaining ?? 0) > 0;
+
+  return (
+    <>
+      {notice ? (
+        <div style={{ marginBottom: 20 }}>
+          <Notice tone="ok">{notice}</Notice>
+        </div>
+      ) : null}
+      {error ? (
+        <div style={{ marginBottom: 20 }}>
+          <Notice tone="error">{error}</Notice>
+        </div>
+      ) : null}
+
+      <Header me={me} />
+      <Summary me={me} />
+      {!paid ? <PlanGate /> : null}
+      <Repositories
+        me={me}
+        canScan={canScan}
+        scanning={scanning}
+        onScan={scan}
+        onConnect={connectGithub}
+      />
+      <History scans={me.scans} />
+      <AnthropicKeyPanel hint={me.account.anthropicKeyHint} onChange={load} />
+    </>
+  );
+}
+
+function Header({ me }: { me: Me }) {
+  const plan = PLANS.find((p) => p.key === me.account.plan);
+  const { remaining, limit } = me.quota;
+
+  let status = <Badge tone="warn">No plan</Badge>;
+  if (plan && limit === null) {
+    status = <Badge tone="ok">{plan.label} plan</Badge>;
+  } else if (plan) {
+    const tone: Tone = (remaining ?? 0) > 3 ? "ok" : (remaining ?? 0) > 0 ? "warn" : "critical";
+    status = (
+      <Badge tone={tone}>
+        {plan.label} &middot; {remaining} of {limit} scans left
+      </Badge>
+    );
+  }
+
+  return (
+    <section className="section first">
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h1 style={{ fontSize: "clamp(26px,3.4vw,36px)" }}>
+          {me.installations[0]?.account_login ?? "Your account"}
+        </h1>
+        {status}
+      </div>
+      <p className="small dim" style={{ marginTop: 10 }}>
+        {me.account.email ?? me.account.id} &middot; {me.installations.length} installation
+        {me.installations.length === 1 ? "" : "s"}
+      </p>
+    </section>
+  );
+}
+
+function Summary({ me }: { me: Me }) {
+  const { quota, scans } = me;
+  const repositories = Object.values(me.repositories).reduce((n, list) => n + list.length, 0);
+  const findings = scans.reduce((n, scan) => n + scan.findings, 0);
+  const waiting = scans.filter((s) => s.state === "queued" || s.state === "running").length;
+
+  const quotaValue =
+    quota.limit === null ? quota.used : `${quota.used}/${quota.limit}`;
+  const quotaNote =
+    quota.limit === null
+      ? "this week · no fixed cap"
+      : quota.remaining === 0 && quota.resetsAt
+        ? `quota frees up in ${until(quota.resetsAt)}`
+        : "used in the last 7 days";
+
+  return (
+    <Section eyebrow="At a glance">
+      <div className="grid grid-4">
+        <Stat label="Repositories" value={repositories} note="connected to ParaCheck" />
+        <Stat
+          label="Scans this week"
+          value={quotaValue}
+          note={quotaNote}
+          tone={quota.limit !== null && quota.remaining === 0 ? "critical" : ""}
+        />
+        <Stat
+          label="Opportunities found"
+          value={findings}
+          note={scans.length ? `across ${scans.length} scans` : "nothing analysed yet"}
+          tone={findings ? "accent" : ""}
+        />
+        <Stat
+          label="In progress"
+          value={waiting}
+          note={waiting ? "running now" : "idle"}
+          tone={waiting ? "accent" : ""}
+        />
+      </div>
+    </Section>
+  );
+}
+
+function PlanGate() {
+  const hobby = PLANS[0];
+  const pro = PLANS[1];
+  return (
+    <Section eyebrow="Choose a plan">
+      <Panel>
+        <div style={{ display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
+          <div>
+            <h3>Pull requests aren&rsquo;t being scanned yet.</h3>
+            <p className="muted" style={{ fontSize: 14, marginTop: 6, maxWidth: "56ch" }}>
+              {hobby.label} is {hobby.price}
+              {hobby.cadence} for {hobby.scansPerWeek} scans a week, {pro.label} is {pro.price}
+              {pro.cadence} for {pro.scansPerWeek}.
+            </p>
+          </div>
+          <div className="btn-row" style={{ marginLeft: "auto" }}>
+            <Link className="btn" href="/pricing">
+              Choose a plan
+            </Link>
+          </div>
+        </div>
+      </Panel>
+    </Section>
+  );
+}
+
+function Repositories({
+  me,
+  canScan,
+  scanning,
+  onScan,
+  onConnect,
+}: {
+  me: Me;
+  canScan: boolean;
+  scanning: string | null;
+  onScan: (installationId: number, repository: string) => void;
+  onConnect: () => void;
+}) {
+  const rows = me.installations.flatMap((installation) =>
+    (me.repositories[installation.id] ?? []).map((repository) => ({ installation, repository })),
+  );
+
+  if (!rows.length) {
+    return (
+      <Section eyebrow="Repositories">
+        <EmptyState
+          heading="No repositories connected"
+          body="Install ParaCheck on a repository and you can scan it straight away - no pull request needed."
+          action={
+            <button className="btn" type="button" onClick={onConnect}>
+              Connect GitHub
+            </button>
+          }
+        />
+      </Section>
+    );
+  }
+
+  const latest = new Map<string, Scan>();
+  for (const scan of me.scans) {
+    if (!latest.has(scan.repository)) latest.set(scan.repository, scan);
+  }
+
+  return (
+    <Section eyebrow="Repositories">
+      <Panel pad={false}>
+        <table className="responsive">
+          <tbody>
+            {rows.map(({ installation, repository }) => {
+              const scan = latest.get(repository);
+              const state = scan ? SCAN_STATE[scan.state] : undefined;
+              const busy =
+                scanning === repository || scan?.state === "queued" || scan?.state === "running";
+
+              return (
+                <tr key={repository}>
+                  <td data-label="Repository">
+                    <code>{repository}</code>
+                  </td>
+                  <td data-label="Status">
+                    {state ? (
+                      <>
+                        <Badge tone={state.tone}>{state.label}</Badge>{" "}
+                        <span className="small dim">{scan?.message ?? ""}</span>
+                      </>
+                    ) : (
+                      <span className="small dim">not scanned yet</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {busy ? (
+                      <span className="small dim">in progress</span>
+                    ) : canScan ? (
+                      <button
+                        className="btn secondary small"
+                        type="button"
+                        onClick={() => onScan(installation.id, repository)}
+                      >
+                        Scan now
+                      </button>
+                    ) : (
+                      <span className="small dim">No scans left</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Panel>
+      <p className="small dim" style={{ marginTop: 12 }}>
+        A scan analyses the default branch and posts the result as a check on that commit.
+        Pull requests are scanned automatically.
+      </p>
+    </Section>
+  );
+}
+
+function History({ scans }: { scans: Scan[] }) {
+  if (!scans.length) {
+    return (
+      <Section eyebrow="Scan history">
+        <EmptyState
+          heading="No scans yet"
+          body="The first scan - from a pull request or the Scan now button - will appear here, with what it found."
+        />
+      </Section>
+    );
+  }
+
+  return (
+    <Section eyebrow="Scan history">
+      <Panel pad={false}>
+        <table className="responsive">
+          <thead>
+            <tr>
+              <th>Repository</th>
+              <th>Scan of</th>
+              <th>Result</th>
+              <th>State</th>
+              <th style={{ textAlign: "right" }}>When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scans.map((scan) => {
+              const state = SCAN_STATE[scan.state] ?? { label: scan.state, tone: "" as Tone };
+              return (
+                <tr key={scan.id}>
+                  <td data-label="Repository">
+                    <code>{scan.repository}</code>
+                  </td>
+                  <td data-label="Scan of">
+                    {scan.pull_request ? (
+                      <a
+                        href={`https://github.com/${scan.repository}/pull/${scan.pull_request}`}
+                      >
+                        #{scan.pull_request}
+                      </a>
+                    ) : scan.head_sha ? (
+                      <a href={`https://github.com/${scan.repository}/commit/${scan.head_sha}`}>
+                        default branch
+                      </a>
+                    ) : (
+                      <span className="dim">default branch</span>
+                    )}
+                  </td>
+                  <td data-label="Result">
+                    {scan.state === "done" ? (
+                      scan.findings === 0 ? (
+                        <Badge tone="ok">Clean</Badge>
+                      ) : (
+                        <Badge tone="warn">{scan.findings} found</Badge>
+                      )
+                    ) : (
+                      <span className="dim small">&mdash;</span>
+                    )}
+                  </td>
+                  <td data-label="State">
+                    <Badge tone={state.tone}>{state.label}</Badge>
+                  </td>
+                  <td data-label="When" className="small dim" style={{ textAlign: "right" }}>
+                    {ago(scan.created_at)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Panel>
+    </Section>
+  );
+}

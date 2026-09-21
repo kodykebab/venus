@@ -29,3 +29,7 @@ QUICKSTART.md
 service/.env
 paracheck.db
 *.db
+
+# Next.js
+web/.next/
+web/out/
