@@ -31,6 +31,20 @@ Containers and Queues both require a **paid Workers plan**.
 
 ## 2. Cloudflare resources
 
+> **Applying `schema.sql` to a database that already has tables does almost
+> nothing.** Every statement is `CREATE TABLE IF NOT EXISTS`, which is exactly
+> as quiet when the existing table is wrong as when it is right. This bit us
+> once: the database kept an earlier scaffold's `accounts` table for several
+> deploys, and the first signed-in request would have failed on a missing
+> column. After applying the schema, check the tables actually match:
+>
+> ```bash
+> npx wrangler d1 execute paracheck --remote --command "PRAGMA table_info(accounts)"
+> ```
+>
+> To replace a table that has diverged, rename it rather than dropping it -
+> `ALTER TABLE accounts RENAME TO accounts_old` - then re-apply the schema.
+
 ```bash
 cd cloudflare
 npm install
