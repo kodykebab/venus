@@ -80,6 +80,12 @@ export function FindingList({ findings }: { findings: FindingDetail[] }) {
         }
         .finding-body { padding: 12px 16px 16px; }
         .finding-why { font-size: 14px; color: var(--ink-2); line-height: 1.6; }
+        .finding-why-pre {
+          font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px;
+          color: var(--ink-2); line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+          background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+          padding: 10px 12px; margin: 0;
+        }
         .finding-fix {
           margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
           background: var(--surface-2); border: 1px solid var(--line);
@@ -92,6 +98,25 @@ export function FindingList({ findings }: { findings: FindingDetail[] }) {
       `}</style>
     </div>
   );
+}
+
+/**
+ * Slither's own detectors write their description as a multi-line,
+ * tab-indented technical dump - meant to be read as fixed-width text, not
+ * prose. A plain <p> collapses every newline and tab into nothing (that is
+ * what HTML does with whitespace by default), turning a structured trace
+ * into one dense run-on paragraph. ParaCheck's own findings (hot-slot, the
+ * parallelism classifier) are hand-written prose and never take this path -
+ * only Slither-sourced, genuinely multi-line descriptions do.
+ */
+function FindingWhy({ finding }: { finding: FindingDetail }) {
+  const isTechnicalDump =
+    finding.source === "slither" && /[\n\t]/.test(finding.description);
+
+  if (isTechnicalDump) {
+    return <pre className="finding-why-pre">{finding.description}</pre>;
+  }
+  return <p className="finding-why">{finding.description}</p>;
 }
 
 function Finding({ finding }: { finding: FindingDetail }) {
@@ -116,7 +141,7 @@ function Finding({ finding }: { finding: FindingDetail }) {
         )}
       </div>
       <div className="finding-body">
-        {finding.description && <p className="finding-why">{finding.description}</p>}
+        {finding.description && <FindingWhy finding={finding} />}
         {finding.suggested_fix && (
           <div className="finding-fix">
             <div className="finding-fix-label">Fix</div>

@@ -275,29 +275,39 @@ async function startScan(request: Request, env: Env, session: Session): Promise<
   const existing = await db.openScanFor(env.DB, installationId, repository, null);
   if (existing) return json({ scanId: existing.id, state: existing.state, deduped: true });
 
-  const scanId = crypto.randomUUID();
-  await db.createScan(env.DB, {
-    id: scanId,
-    account_id: session.accountId,
-    installation_id: installationId,
-    repository,
-    pull_request: null,
-    head_sha: null,
-    trigger: "manual",
-    state: "queued",
-  });
   const dispatched = await github.dispatchWorkflow(env, installationId, repository);
   if (!dispatched.ok) {
-    // A distinct state, not just "failed" with a matching message: the
-    // dashboard needs to reliably tell "no workflow file yet" apart from a
-    // real failure to offer the right button, and matching on message text
-    // would break the moment the wording changes.
+    // Only recorded on failure. A row created here for the success case would
+    // have head_sha null - this moment doesn't know it yet - and claimRun's
+    // own dedup matches on the real head_sha the job resolves once it starts,
+    // which a null value can never equal in SQL. That row would never be
+    // found, never get claimed, and sit at "queued" forever: exactly the
+    // orphan a customer saw appear on every single click, not occasionally.
+    // The fix isn't to make the match looser - it's to not create a row that
+    // has nothing authoritative to say yet. On failure there's no race to
+    // lose: nothing is ever going to call claimRun for a dispatch that never
+    // reached GitHub, so recording the reason directly is correct and final.
+    const scanId = crypto.randomUUID();
     const state = dispatched.needsWorkflow ? "no_workflow" : "failed";
+    await db.createScan(env.DB, {
+      id: scanId,
+      account_id: session.accountId,
+      installation_id: installationId,
+      repository,
+      pull_request: null,
+      head_sha: null,
+      trigger: "manual",
+      state: "queued",
+    });
     await db.completeScan(env.DB, scanId, state, { message: dispatched.reason });
     return json({ error: dispatched.reason, needsWorkflow: dispatched.needsWorkflow }, 409);
   }
 
-  return json({ scanId, state: "queued" }, 202);
+  // Dispatch succeeded: nothing to persist here. The job GitHub just started
+  // will call claimRun within seconds, and that call is what creates the
+  // scan record - this response has no scanId to hand back because none
+  // exists yet, deliberately.
+  return json({ state: "queued" }, 202);
 }
 
 /**
