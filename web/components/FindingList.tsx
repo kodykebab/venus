@@ -85,10 +85,10 @@ export function FindingList({ findings }: { findings: FindingDetail[] }) {
         <div className="finding-section">
           <div className="finding-section-head">
             <Badge tone="">
-              Unproven leads &middot; {unproven.length}
+              Leads &amp; notes &middot; {unproven.length}
             </Badge>
             <span className="finding-section-note">
-              Pattern matches, not reproduced. These never block a merge.
+              Pattern matches and compatibility notes. Not proven exploitable, so these never block a merge.
             </span>
           </div>
           {bySeverity(unproven).map(([severity, group]) => (

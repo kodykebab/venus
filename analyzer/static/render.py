@@ -192,15 +192,15 @@ def _render_unproven(findings: list[dict], collapsed: bool) -> list[str]:
     for finding in findings:
         by_severity.setdefault(finding["severity"], []).append(finding)
 
-    header = f"Unproven leads ({len(findings)})"
+    header = f"Leads &amp; notes ({len(findings)})"
     if collapsed:
         lines.append("<details>")
-        lines.append(f"<summary>{header} — pattern matches, not reproduced</summary>")
+        lines.append(f"<summary>{header} — not proven exploitable, never blocking</summary>")
         lines.append("")
     else:
-        lines.append(f"### {header}")
+        lines.append(f"### Leads &amp; notes ({len(findings)})")
         lines.append("")
-        lines.append("_Pattern matches, not reproduced. Nothing here blocks a merge._")
+        lines.append("_Pattern matches and compatibility notes. Not proven exploitable, so nothing here blocks a merge._")
         lines.append("")
 
     for severity in SEVERITY_ORDER:

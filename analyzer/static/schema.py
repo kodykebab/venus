@@ -107,18 +107,22 @@ class Finding:
 
 
 def sort_findings(findings: list[Finding]) -> list[Finding]:
-    """Proven first, then most severe, then highest confidence, then stable.
+    """Proven first, then by severity, then by evidence, then stable.
 
-    Evidence outranks severity deliberately: a proven medium is something a
-    developer can act on right now, and an unproven high is a lead. Putting the
-    provable thing first is the whole point of the product.
+    The top split is proven vs not: a proven medium (an exploit that
+    reproduces) leads an unproven high (a lead), because acting on the thing
+    that is real is the whole point of the product. *Within* each group,
+    severity leads - among leads a high matters more than a medium - and
+    evidence breaks ties, so a deterministic compatibility note sorts above a
+    same-severity pattern hunch without ever jumping ahead of a more severe one.
     """
     confidence_rank = {"high": 0, "medium": 1, "low": 2}
     return sorted(
         findings,
         key=lambda f: (
-            evidence_rank(f.evidence),
+            0 if is_proven(f.evidence) else 1,
             severity_rank(f.severity),
+            evidence_rank(f.evidence),
             confidence_rank.get(f.confidence, 3),
             f.check,
             f.primary_line or 0,

@@ -75,11 +75,12 @@ def test_review_merges_both_analyzers():
     assert report["unanalyzable"] is False
 
     sources = {f["source"] for f in report["findings"]}
-    assert sources == {"paracheck", "slither"}, "both analyzers must contribute findings"
+    assert {"paracheck", "slither"} <= sources, "both analyzers must contribute findings"
 
-    # The deliberately arbitrary `drain()` send is the headline finding.
-    assert report["findings"][0]["severity"] == "high"
-    assert report["findings"][0]["check"] == "arbitrary-send-eth"
+    # The deliberately arbitrary `drain()` send is still surfaced as a high
+    # finding, wherever it sorts among the other high-severity leads.
+    sends = [f for f in report["findings"] if f["check"] == "arbitrary-send-eth"]
+    assert sends and sends[0]["severity"] == "high"
 
     # The shared `total` counter is ParaCheck's own category.
     hot = [f for f in report["findings"] if f["check"] == "hot-slot"]
@@ -158,7 +159,7 @@ def test_render_markdown_leads_with_proven_and_folds_unproven():
     # section says out loud that it is not proven and does not block.
     assert "forge test --match-path test/Poc.t.sol" in rendered
     assert "proven" in rendered.lower()
-    assert "pattern matches, not reproduced" in rendered.lower()
+    assert "not proven exploitable" in rendered.lower()
 
 
 def test_render_markdown_unproven_only_is_not_hidden():

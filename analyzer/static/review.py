@@ -50,6 +50,24 @@ def _source_file_of(contract) -> str | None:
     return mapping.filename.relative or mapping.filename.short
 
 
+def _chain_matrix_findings(source_file: str, solc: str | None) -> list[Finding]:
+    """Chain-compatibility findings for one source file, as Finding objects so
+    they sort and render alongside everything else. Best-effort: a read failure
+    or matrix error must never fail the review."""
+    try:
+        from chain_matrix import matrix_findings
+
+        with open(source_file, encoding="utf-8", errors="replace") as handle:
+            source = handle.read()
+        known = set(Finding.__dataclass_fields__)
+        return [
+            Finding(**{k: v for k, v in raw.items() if k in known})
+            for raw in matrix_findings(source, source_file, solc_version=solc)
+        ]
+    except Exception:
+        return []
+
+
 def _parallelism_findings(contract, flags: list[dict], chain: Chain) -> list[Finding]:
     findings = []
     for flag in flags:
@@ -131,6 +149,11 @@ def review_file(
 
     # Detectors run once for the whole compilation unit, not per contract.
     findings.extend(run_detectors(slither))
+
+    # Chain Matrix: cross-chain compatibility of the source itself. Independent
+    # of the target chain (it asks "would this behave the same everywhere I
+    # deploy?"), deterministic, and never blocking - evidence tier C.
+    findings.extend(_chain_matrix_findings(source_file, solc))
 
     simulation_result = None
     if simulation and target_chain.runs_parallelism_analysis:
