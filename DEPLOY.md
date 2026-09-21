@@ -138,9 +138,16 @@ Create at **github.com/settings/apps/new**.
 | Webhook secret | same value as `GITHUB_WEBHOOK_SECRET` |
 | Where can this be installed | **Any account** |
 
-Repository permissions: **Contents** read · **Metadata** read · **Pull
-requests** read · **Checks** read & write · **Actions** read & write (the Scan
-now button dispatches a workflow).
+Repository permissions: **Contents** read & write · **Metadata** read · **Pull
+requests** read & write · **Checks** read & write · **Actions** read & write.
+
+Contents and Pull requests need **write**, not read: the "Add workflow" button
+opens a pull request that adds `.github/workflows/paracheck.yml`, which means
+creating a branch, committing a file and opening the PR. With read-only on
+either, branch creation returns 403 and no PR is ever created. (Actions write is
+what lets the Scan now button dispatch a workflow.) Changing these after the App
+exists requires each installer to approve the new permissions on their
+installation before a token carries them.
 
 Subscribe to: **Pull request**. `Installation` and `Installation repositories`
 are delivered to Apps automatically and are not in the subscribe list.
