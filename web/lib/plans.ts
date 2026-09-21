@@ -43,7 +43,7 @@ export const PLANS: Plan[] = [
   {
     key: "pro",
     label: "Pro",
-    price: "$24",
+    price: "$24.99",
     cadence: "/month",
     scansPerMonth: 100,
     blurb: "For one developer shipping regularly.",
@@ -52,7 +52,7 @@ export const PLANS: Plan[] = [
   {
     key: "team",
     label: "Team",
-    price: "$49",
+    price: "$49.99",
     cadence: "/month",
     scansPerMonth: 250,
     blurb: "For a team shipping to a parallel-execution chain.",

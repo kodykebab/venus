@@ -55,7 +55,7 @@ export const PLANS: Record<string, Plan> = {
   pro: {
     key: "pro",
     label: "Pro",
-    price: "$24",
+    price: "$24.99",
     cadence: "/month",
     scansPerMonth: 100,
     priceEnv: "STRIPE_PRO_PRICE_ID",
@@ -65,7 +65,7 @@ export const PLANS: Record<string, Plan> = {
   team: {
     key: "team",
     label: "Team",
-    price: "$49",
+    price: "$49.99",
     cadence: "/month",
     scansPerMonth: 250,
     priceEnv: "STRIPE_TEAM_PRICE_ID",

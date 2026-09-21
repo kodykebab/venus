@@ -75,10 +75,10 @@ describe("quota decisions", () => {
 
   it("names the next tier up, not always the cheapest", () => {
     // Telling a Pro customer about Pro is noise.
-    expect(decide(quota({ used: 10, remaining: 0 })).reason).toContain("Pro is $24");
+    expect(decide(quota({ used: 10, remaining: 0 })).reason).toContain("Pro is $24.99");
 
     const pro = decide(quota({ plan: "pro", limit: 100, used: 100, remaining: 0 }));
-    expect(pro.reason).toContain("Team is $49");
+    expect(pro.reason).toContain("Team is $49.99");
     expect(pro.reason).not.toContain("Pro is");
 
     const team = decide(quota({ plan: "team", limit: 250, used: 250, remaining: 0 }));
