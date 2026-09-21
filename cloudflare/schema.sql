@@ -64,6 +64,13 @@ CREATE TABLE IF NOT EXISTS scans (
   findings        INTEGER NOT NULL DEFAULT 0,
   verdict         TEXT,
   message         TEXT,
+  -- The full finding list as JSON: [{severity, check, title, description,
+  -- suggested_fix, file, lines, contract, confidence}, ...]. `findings`
+  -- above stays as a plain count - it drives the quota query and the
+  -- dashboard summary cheaply, without deserializing every scan's full
+  -- report just to show a number. This column is what a scan's detail
+  -- view actually renders, and is null until a scan reaches 'done'.
+  findings_json   TEXT,
   created_at      INTEGER NOT NULL,
   completed_at    INTEGER
 );

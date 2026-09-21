@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
-import { api, ApiError, type Me, type Quota, type Scan } from "@/lib/api";
+import { api, ApiError, type Me, type Quota, type Scan, type ScanDetail } from "@/lib/api";
 import { PLANS } from "@/lib/plans";
 import { ago, Badge, EmptyState, Notice, Panel, Section, Stat, until, type Tone } from "./ui";
 import { AnthropicKeyPanel } from "./AnthropicKeyPanel";
+import { FindingList } from "./FindingList";
 
 /**
  * The dashboard.
@@ -385,7 +386,20 @@ function Repositories({
   );
 }
 
+function ScanFindings({ entry }: { entry: ScanDetail | "loading" | "error" | undefined }) {
+  if (!entry || entry === "loading") {
+    return <p className="muted small" style={{ margin: 0 }}>Loading findings&hellip;</p>;
+  }
+  if (entry === "error") {
+    return <p className="muted small" style={{ margin: 0 }}>Could not load this scan's findings.</p>;
+  }
+  return <FindingList findings={entry.findings} />;
+}
+
 function History({ scans }: { scans: Scan[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Record<string, ScanDetail | "loading" | "error">>({});
+
   if (!scans.length) {
     return (
       <Section eyebrow="Scan history">
@@ -395,6 +409,23 @@ function History({ scans }: { scans: Scan[] }) {
         />
       </Section>
     );
+  }
+
+  async function toggle(scan: Scan) {
+    if (scan.state !== "done") return;
+    if (expanded === scan.id) {
+      setExpanded(null);
+      return;
+    }
+    setExpanded(scan.id);
+    if (detail[scan.id] && detail[scan.id] !== "error") return;
+    setDetail((prev) => ({ ...prev, [scan.id]: "loading" }));
+    try {
+      const result = await api<ScanDetail>(`/api/scans/${scan.id}`);
+      setDetail((prev) => ({ ...prev, [scan.id]: result }));
+    } catch {
+      setDetail((prev) => ({ ...prev, [scan.id]: "error" }));
+    }
   }
 
   return (
@@ -413,44 +444,68 @@ function History({ scans }: { scans: Scan[] }) {
           <tbody>
             {scans.map((scan) => {
               const state = SCAN_STATE[scan.state] ?? { label: scan.state, tone: "" as Tone };
+              const clickable = scan.state === "done";
+              const isOpen = expanded === scan.id;
               return (
-                <tr key={scan.id}>
-                  <td data-label="Repository">
-                    <code>{scan.repository}</code>
-                  </td>
-                  <td data-label="Scan of">
-                    {scan.pull_request ? (
-                      <a
-                        href={`https://github.com/${scan.repository}/pull/${scan.pull_request}`}
-                      >
-                        #{scan.pull_request}
-                      </a>
-                    ) : scan.head_sha ? (
-                      <a href={`https://github.com/${scan.repository}/commit/${scan.head_sha}`}>
-                        default branch
-                      </a>
-                    ) : (
-                      <span className="dim">default branch</span>
-                    )}
-                  </td>
-                  <td data-label="Result">
-                    {scan.state === "done" ? (
-                      scan.findings === 0 ? (
-                        <Badge tone="ok">Clean</Badge>
+                <Fragment key={scan.id}>
+                  <tr
+                    onClick={() => toggle(scan)}
+                    style={clickable ? { cursor: "pointer" } : undefined}
+                    aria-expanded={clickable ? isOpen : undefined}
+                  >
+                    <td data-label="Repository">
+                      <code>{scan.repository}</code>
+                    </td>
+                    <td data-label="Scan of">
+                      {scan.pull_request ? (
+                        <a
+                          href={`https://github.com/${scan.repository}/pull/${scan.pull_request}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          #{scan.pull_request}
+                        </a>
+                      ) : scan.head_sha ? (
+                        <a
+                          href={`https://github.com/${scan.repository}/commit/${scan.head_sha}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          default branch
+                        </a>
                       ) : (
-                        <Badge tone="warn">{scan.findings} found</Badge>
-                      )
-                    ) : (
-                      <span className="dim small">&mdash;</span>
-                    )}
-                  </td>
-                  <td data-label="State">
-                    <Badge tone={state.tone}>{state.label}</Badge>
-                  </td>
-                  <td data-label="When" className="small dim" style={{ textAlign: "right" }}>
-                    {ago(scan.created_at)}
-                  </td>
-                </tr>
+                        <span className="dim">default branch</span>
+                      )}
+                    </td>
+                    <td data-label="Result">
+                      {scan.state === "done" ? (
+                        scan.findings === 0 ? (
+                          <Badge tone="ok">Clean</Badge>
+                        ) : (
+                          <span className="btn-row" style={{ gap: 6 }}>
+                            <Badge tone="warn">{scan.findings} found</Badge>
+                            <span className="small" style={{ color: "var(--accent)" }}>
+                              {isOpen ? "Hide" : "View"}
+                            </span>
+                          </span>
+                        )
+                      ) : (
+                        <span className="dim small">&mdash;</span>
+                      )}
+                    </td>
+                    <td data-label="State">
+                      <Badge tone={state.tone}>{state.label}</Badge>
+                    </td>
+                    <td data-label="When" className="small dim" style={{ textAlign: "right" }}>
+                      {ago(scan.created_at)}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={5} style={{ background: "var(--surface-2)", padding: "18px 16px" }}>
+                        <ScanFindings entry={detail[scan.id]} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>

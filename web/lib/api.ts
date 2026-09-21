@@ -90,6 +90,25 @@ export interface Scan {
   completed_at: number | null;
 }
 
+/** One finding, in full - matches analyzer/static/schema.py's Finding. */
+export interface FindingDetail {
+  source: string;
+  check: string;
+  severity: string;
+  confidence: string;
+  title: string;
+  description: string;
+  contract: string | null;
+  file: string | null;
+  lines: number[];
+  suggested_fix: string | null;
+}
+
+export interface ScanDetail {
+  scan: Scan;
+  findings: FindingDetail[];
+}
+
 export interface Me {
   account: {
     id: string;

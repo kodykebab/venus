@@ -84,6 +84,59 @@ def test_render_markdown_covers_both_states():
     assert "Unanalyzable" in bad and "nope" in bad
 
 
+def test_render_markdown_shows_the_full_finding_not_just_a_count():
+    # A severity count answers "how many"; a developer opening a Check Run
+    # needs "what, where, why, and what to do about it" without leaving
+    # GitHub - the description and the fix must both actually be in the body.
+    rendered = render_markdown(review_file(STAKING), "StakingPoolSample.sol")
+    report = review_file(STAKING)
+    finding = report["findings"][0]
+    assert finding["title"] in rendered
+    assert finding["description"] in rendered
+    if finding.get("suggested_fix"):
+        assert finding["suggested_fix"] in rendered
+
+
+def test_render_markdown_groups_by_severity_and_collapses_the_minor_ones():
+    from schema import Finding
+
+    report = {
+        "chain": {"name": "Monad", "parallelismAnalysisRan": True},
+        "contracts": [],
+        "summary": {"totalFindings": 2, "bySeverity": {"critical": 1, "info": 1}},
+        "findings": [
+            Finding(source="paracheck", check="x", severity="critical", confidence="high",
+                   title="Critical thing", description="why it matters").to_dict(),
+            Finding(source="paracheck", check="y", severity="info", confidence="low",
+                   title="Minor thing", description="minor context").to_dict(),
+        ],
+    }
+    rendered = render_markdown(report, "x.sol")
+    # Critical is shown open; info is inside a <details> the reader can expand.
+    critical_pos = rendered.index("Critical thing")
+    details_pos = rendered.index("<details>")
+    info_pos = rendered.index("Minor thing")
+    assert critical_pos < details_pos < info_pos
+
+
+def test_render_markdown_fences_slithers_multiline_descriptions():
+    from schema import Finding
+
+    raw = "Reentrancy in Foo.bar() (Foo.sol#1-9):\n\t- external call\n\t- write after call"
+    report = {
+        "chain": {"name": "Monad", "parallelismAnalysisRan": True},
+        "contracts": [],
+        "summary": {"totalFindings": 1, "bySeverity": {"medium": 1}},
+        "findings": [
+            Finding(source="slither", check="reentrancy-no-eth", severity="medium",
+                   confidence="medium", title="Reentrancy in Foo.bar()", description=raw).to_dict(),
+        ],
+    }
+    rendered = render_markdown(report, "x.sol")
+    assert "```" in rendered
+    assert "external call" in rendered
+
+
 def test_llm_layer_degrades_without_credentials(monkeypatch):
     import synthesize
 

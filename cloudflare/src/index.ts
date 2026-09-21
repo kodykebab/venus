@@ -99,6 +99,9 @@ async function route(
 
   if (path === "/api/me") return me(env, session);
   if (path === "/api/scans" && request.method === "POST") return startScan(request, env, session);
+  if (path.startsWith("/api/scans/") && request.method === "GET") {
+    return scanDetail(path.slice("/api/scans/".length), env, session);
+  }
   if (path === "/api/repos/add-workflow" && request.method === "POST") {
     return addWorkflow(request, env, session);
   }
@@ -303,6 +306,31 @@ async function startScan(request: Request, env: Env, session: Session): Promise<
  * can be scanned at all - previously that state was a dead end with a message
  * telling the customer to go do it themselves.
  */
+/**
+ * The detail behind one scan's count: every finding, in full. A scan history
+ * row answers "how many"; this answers "what, where, why, and what to do
+ * about it" - the question a developer actually opens the dashboard to ask.
+ */
+async function scanDetail(scanId: string, env: Env, session: Session): Promise<Response> {
+  const scan = await db.getScan(env.DB, scanId);
+  if (!scan || scan.account_id !== session.accountId) {
+    // Same response whether the scan exists and belongs to someone else, or
+    // doesn't exist at all - confirming the first would be its own small leak.
+    return json({ error: "unknown scan" }, 404);
+  }
+
+  let findings: db.FindingDetail[] = [];
+  if (scan.findings_json) {
+    try {
+      findings = JSON.parse(scan.findings_json);
+    } catch {
+      findings = []; // a stored row from before this shipped, or a parse edge case
+    }
+  }
+
+  return json({ scan, findings });
+}
+
 async function addWorkflow(request: Request, env: Env, session: Session): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as {
     installationId?: number;
@@ -655,6 +683,7 @@ async function reportRun(request: Request, env: Env): Promise<Response> {
     findings?: number;
     verdict?: string | null;
     message?: string;
+    findingsDetail?: unknown;
   };
   if (!body.scanId) return json({ error: "scanId is required" }, 400);
 
@@ -673,6 +702,23 @@ async function reportRun(request: Request, env: Env): Promise<Response> {
     findings: body.findings ?? 0,
     verdict: body.verdict ?? null,
     message: body.message ?? "",
+    findingsJson: encodeFindings(body.findingsDetail),
   });
   return json({ ok: true });
+}
+
+// The Checks API already caps annotations at 50 for the same reason: past
+// that many, a list stops being something anyone reads. Capped again here
+// independently of run.py's own good behaviour, because OIDC only proves
+// which repository is calling, not that run.py's actual code is what sent
+// this request - a hand-crafted request with a stolen-but-valid short-lived
+// token could still try to bloat a scan's own row.
+const MAX_STORED_FINDINGS = 200;
+const MAX_FINDINGS_JSON_BYTES = 200_000;
+
+function encodeFindings(detail: unknown): string | null {
+  if (!Array.isArray(detail) || detail.length === 0) return null;
+  const trimmed = detail.slice(0, MAX_STORED_FINDINGS);
+  const encoded = JSON.stringify(trimmed);
+  return encoded.length > MAX_FINDINGS_JSON_BYTES ? null : encoded;
 }

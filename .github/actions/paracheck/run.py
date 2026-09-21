@@ -102,7 +102,19 @@ def changed_files(payload: dict, repository: str, token: str) -> list[str]:
     return changed
 
 
-def report(state: str, findings: int = 0, verdict: str | None = None, message: str = "") -> None:
+# The Checks API caps annotations at 50 for the same reason: past that many,
+# a list stops being something anyone reads. The Worker independently caps
+# again at 200 - this is the well-behaved side of that limit, not the only one.
+MAX_REPORTED_FINDINGS = 200
+
+
+def report(
+    state: str,
+    findings: int = 0,
+    verdict: str | None = None,
+    message: str = "",
+    findings_detail: list[dict] | None = None,
+) -> None:
     api = os.environ.get("API_URL", "")
     scan_id = os.environ.get("SCAN_ID", "")
     oidc = os.environ.get("OIDC", "")
@@ -118,6 +130,7 @@ def report(state: str, findings: int = 0, verdict: str | None = None, message: s
             "findings": findings,
             "verdict": verdict,
             "message": message[:400],
+            "findingsDetail": (findings_detail or [])[:MAX_REPORTED_FINDINGS],
         }).encode(),
         headers={
             "Authorization": f"Bearer {oidc}",
@@ -217,7 +230,8 @@ def main() -> int:
         handle.write(f"findings={len(findings)}\n")
 
     report("done", findings=len(findings), verdict=verdict,
-           message=f"{len(findings)} opportunit{'y' if len(findings) == 1 else 'ies'} found.")
+           message=f"{len(findings)} opportunit{'y' if len(findings) == 1 else 'ies'} found.",
+           findings_detail=findings)
 
     print(summary)
     return 1 if conclusion == "failure" else 0

@@ -41,8 +41,24 @@ export interface Scan {
   findings: number;
   verdict: string | null;
   message: string | null;
+  findings_json: string | null;
   created_at: number;
   completed_at: number | null;
+}
+
+/** One entry in a scan's findings_json - the shape analyzer/static/schema.py's
+ * Finding.to_dict() produces, passed through run.py unmodified. */
+export interface FindingDetail {
+  source: string;
+  check: string;
+  severity: string;
+  confidence: string;
+  title: string;
+  description: string;
+  contract: string | null;
+  file: string | null;
+  lines: number[];
+  suggested_fix: string | null;
 }
 
 // --- accounts ---------------------------------------------------------------
@@ -239,7 +255,7 @@ export async function isRepositoryActive(
 
 export async function createScan(
   db: D1Database,
-  scan: Omit<Scan, "findings" | "verdict" | "message" | "created_at" | "completed_at">,
+  scan: Omit<Scan, "findings" | "verdict" | "message" | "findings_json" | "created_at" | "completed_at">,
 ): Promise<void> {
   await db
     .prepare(
@@ -265,15 +281,33 @@ export async function completeScan(
   db: D1Database,
   id: string,
   state: string,
-  fields: { findings?: number; verdict?: string | null; message?: string | null } = {},
+  fields: {
+    findings?: number;
+    verdict?: string | null;
+    message?: string | null;
+    findingsJson?: string | null;
+  } = {},
 ): Promise<void> {
   await db
     .prepare(
-      `UPDATE scans SET state = ?, findings = ?, verdict = ?, message = ?, completed_at = ?
+      `UPDATE scans SET state = ?, findings = ?, verdict = ?, message = ?, findings_json = ?, completed_at = ?
        WHERE id = ?`,
     )
-    .bind(state, fields.findings ?? 0, fields.verdict ?? null, (fields.message ?? "").slice(0, 500), now(), id)
+    .bind(
+      state,
+      fields.findings ?? 0,
+      fields.verdict ?? null,
+      (fields.message ?? "").slice(0, 500),
+      fields.findingsJson ?? null,
+      now(),
+      id,
+    )
     .run();
+}
+
+/** A single scan, owned-checked by the caller - this returns any row by id. */
+export async function getScan(db: D1Database, id: string): Promise<Scan | null> {
+  return await db.prepare("SELECT * FROM scans WHERE id = ?").bind(id).first<Scan>();
 }
 
 /**
