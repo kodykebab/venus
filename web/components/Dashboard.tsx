@@ -8,6 +8,7 @@ import { PLANS } from "@/lib/plans";
 import { ago, Badge, EmptyState, Notice, Panel, Section, Stat, until, type Tone } from "./ui";
 import { AnthropicKeyPanel } from "./AnthropicKeyPanel";
 import { FindingList } from "./FindingList";
+import { ScanActivity } from "./ScanActivity";
 
 /**
  * The dashboard.
@@ -63,9 +64,9 @@ export function Dashboard() {
     setError(null);
     try {
       await api("/api/scans", { method: "POST", body: { installationId, repository } });
-      setNotice(
-        "Scanning. The result appears here and as a check on the commit, usually within a couple of minutes.",
-      );
+      // No notice here: the repository row's own status badge starts
+      // reflecting "Scanning" within the next poll, which said the same
+      // thing this banner used to - just already on screen, not on top of it.
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not start that scan.");
     } finally {
@@ -152,6 +153,7 @@ export function Dashboard() {
       ) : null}
 
       <Header me={me} />
+      <ScanActivity scans={me.scans} />
       <Summary me={me} />
       {runningLow ? <PlanGate remaining={me.quota.remaining ?? 0} /> : null}
       <Repositories
