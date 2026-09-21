@@ -16,8 +16,8 @@ ENVIRONMENT = "production"
 CLERK_ISSUER = ""
 CLERK_AUDIENCE = ""
 GITHUB_APP_SLUG = "paracheck-ci"
-PUBLIC_URL = "https://paracheck.dev"
-ENTERPRISE_SALES_EMAIL = ""
+PUBLIC_URL = "https://paracheck-web.kritarthshankr.workers.dev"
+ENTERPRISE_SALES_EMAIL = "kritarthshankr@gmail.com"
 
 [[d1_databases]]
 binding = "DB"

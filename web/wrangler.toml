@@ -1,0 +1,14 @@
+# The ParaCheck site: a static export served straight from Cloudflare's edge.
+#
+# An assets-only Worker rather than a Pages project: Pages is now folded into
+# Workers, and `wrangler pages` assumes an SSR Next.js app and tries to run
+# OpenNext. This site is fully static - the dashboard is a client component
+# talking to the control-plane Worker - so there is no server to adapt.
+
+name = "paracheck-web"
+compatibility_date = "2026-09-21"
+
+[assets]
+directory = "./out"
+# Next's static export writes a 404.html; serve it rather than a bare status.
+not_found_handling = "404-page"
