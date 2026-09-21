@@ -64,6 +64,22 @@ export function PlanGrid() {
                 <a className="btn secondary" href={enterpriseMailto()}>
                   Talk to us
                 </a>
+              ) : plan.key === "free" ? (
+                // No checkout for free: the action is simply starting.
+                <>
+                  <SignedOut>
+                    <SignInButton mode="modal">
+                      <button className="btn secondary" type="button">
+                        Start free
+                      </button>
+                    </SignInButton>
+                  </SignedOut>
+                  <SignedIn>
+                    <a className="btn secondary" href="/dashboard/">
+                      Go to dashboard
+                    </a>
+                  </SignedIn>
+                </>
               ) : (
                 <>
                   <SignedOut>

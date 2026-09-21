@@ -1,7 +1,7 @@
 import { hmacSha256Hex, timingSafeEqual } from "./crypto";
 import * as db from "./db";
 import type { Env } from "./env";
-import { PLANS, PURCHASABLE } from "./plans";
+import { DEFAULT_PLAN, PLANS, PURCHASABLE } from "./plans";
 
 /**
  * Stripe Checkout and the subscription lifecycle.
@@ -15,9 +15,9 @@ const API = "https://api.stripe.com/v1";
 const SIGNATURE_TOLERANCE_SECONDS = 300;
 
 export function configured(env: Env): boolean {
-  return Boolean(
-    env.STRIPE_SECRET_KEY && env.STRIPE_HOBBY_PRICE_ID && env.STRIPE_PRO_PRICE_ID,
-  );
+  // Only Pro is bought online: Free needs no checkout and Enterprise is
+  // sales-led, so a Pro price is the whole requirement.
+  return Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_PRO_PRICE_ID);
 }
 
 function priceFor(env: Env, plan: string): string | null {
@@ -175,7 +175,7 @@ export async function applyEvent(
       return `${accountId} subscribed to ${plan}`;
     }
 
-    // A renewal re-asserts the plan. Quota is counted per rolling week rather
+    // A renewal re-asserts the plan. Quota is counted per rolling 30 days rather
     // than granted, so nothing needs replenishing here - this exists so an
     // account that lapsed and paid again is restored without a new Checkout.
     case "invoice.paid":
@@ -192,8 +192,8 @@ export async function applyEvent(
         return `${accountId} now on ${plan}`;
       }
       if (["canceled", "unpaid", "incomplete_expired"].includes(object.status ?? "")) {
-        await db.setPlan(env.DB, accountId, "unpaid");
-        return `${accountId} returned to unpaid (${object.status})`;
+        await db.setPlan(env.DB, accountId, DEFAULT_PLAN);
+        return `${accountId} returned to the free tier (${object.status})`;
       }
       return null;
     }
@@ -201,8 +201,8 @@ export async function applyEvent(
     case "customer.subscription.deleted":
     case "invoice.payment_failed": {
       if (!accountId) return null;
-      await db.setPlan(env.DB, accountId, "unpaid");
-      return `${accountId} returned to unpaid`;
+      await db.setPlan(env.DB, accountId, DEFAULT_PLAN);
+      return `${accountId} returned to the free tier`;
     }
 
     default:

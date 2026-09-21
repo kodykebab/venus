@@ -10,25 +10,25 @@
  */
 
 export interface Plan {
-  key: "hobby" | "pro" | "enterprise";
+  key: "free" | "pro" | "enterprise";
   label: string;
   price: string;
   cadence: string;
-  scansPerWeek: number | null;
+  scansPerMonth: number | null;
   blurb: string;
   features: string[];
 }
 
 export const PLANS: Plan[] = [
   {
-    key: "hobby",
-    label: "Hobby",
-    price: "$9",
-    cadence: "/month",
-    scansPerWeek: 20,
-    blurb: "For a developer keeping one or two contracts honest.",
+    key: "free",
+    label: "Free",
+    price: "$0",
+    cadence: "",
+    scansPerMonth: 10,
+    blurb: "Enough to keep a contract honest and see what this finds.",
     features: [
-      "20 scans per week",
+      "10 scans per month",
       "GitHub PR Check Runs and inline annotations",
       "Static analysis: Slither + hot-slot classifier",
       "Dynamic contention analysis",
@@ -37,13 +37,13 @@ export const PLANS: Plan[] = [
   {
     key: "pro",
     label: "Pro",
-    price: "$29",
+    price: "$19",
     cadence: "/month",
-    scansPerWeek: 100,
+    scansPerMonth: 50,
     blurb: "For a team shipping to a parallel-execution chain.",
     features: [
-      "100 scans per week",
-      "Everything in Hobby",
+      "50 scans per month",
+      "Everything in Free",
       "Unlimited repositories per installation",
       "Merge gating on severity thresholds",
     ],
@@ -53,10 +53,10 @@ export const PLANS: Plan[] = [
     label: "Enterprise",
     price: "Custom",
     cadence: "",
-    scansPerWeek: null,
+    scansPerMonth: null,
     blurb: "For protocols with their own volume, deployment and support needs.",
     features: [
-      "Custom weekly scan quota",
+      "Custom monthly scan quota",
       "Everything in Pro",
       "Self-hosted or dedicated deployment options",
       "Direct support channel",

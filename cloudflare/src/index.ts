@@ -3,7 +3,7 @@ import { decrypt, encrypt, keyHint } from "./crypto";
 import * as db from "./db";
 import type { Env } from "./env";
 import * as github from "./github";
-import { decide, PLANS, PURCHASABLE, scansPerWeek } from "./plans";
+import { decide, DEFAULT_PLAN, PLANS, PURCHASABLE } from "./plans";
 import * as oidc from "./oidc";
 import * as stripe from "./stripe";
 
@@ -145,7 +145,7 @@ function health(env: Env): Response {
 
 function plansResponse(env: Env): Response {
   return json({
-    plans: PURCHASABLE.map((key) => PLANS[key]),
+    plans: [PLANS.free, ...PURCHASABLE.map((key) => PLANS[key])],
     enterprise: PLANS.enterprise,
     enterpriseEmail: env.ENTERPRISE_SALES_EMAIL || null,
     checkoutAvailable: stripe.configured(env),
@@ -222,12 +222,12 @@ async function me(env: Env, session: Session): Promise<Response> {
       id: session.accountId,
       kind: session.kind,
       email: account?.email ?? session.email,
-      plan: account?.plan ?? "unpaid",
+      plan: account?.plan ?? DEFAULT_PLAN,
       anthropicKeyHint: account?.anthropic_key_hint ?? null,
       hasStripeCustomer: Boolean(account?.stripe_customer_id),
     },
     quota,
-    plan: PLANS[account?.plan ?? "unpaid"] ?? null,
+    plan: PLANS[account?.plan ?? DEFAULT_PLAN] ?? PLANS.free,
     installations,
     repositories,
     scans: await db.recentScans(env.DB, session.accountId, 25),

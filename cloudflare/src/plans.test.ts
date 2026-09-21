@@ -1,32 +1,34 @@
 import { describe, expect, it } from "vitest";
 
 import { decrypt, encrypt, keyHint, timingSafeEqual } from "./crypto";
-import { decide, PLANS, PURCHASABLE, QUOTA_WINDOW_SECONDS, scansPerWeek, type Quota } from "./plans";
+import { decide, PLANS, PURCHASABLE, QUOTA_WINDOW_SECONDS, scanLimit, type Quota } from "./plans";
 
 const quota = (over: Partial<Quota> = {}): Quota => ({
-  plan: "hobby",
-  limit: 20,
+  plan: "free",
+  limit: 10,
   used: 0,
-  remaining: 20,
+  remaining: 10,
   resetsAt: null,
   ...over,
 });
 
 describe("plan limits", () => {
   it("publishes the launch quotas", () => {
-    expect(scansPerWeek("hobby")).toBe(20);
-    expect(scansPerWeek("pro")).toBe(100);
+    expect(scanLimit("free")).toBe(10);
+    expect(scanLimit("pro")).toBe(50);
   });
 
   it("gives enterprise no fixed cap", () => {
-    expect(scansPerWeek("enterprise")).toBeNull();
+    expect(scanLimit("enterprise")).toBeNull();
   });
 
-  it("fails closed on an unpaid or misspelled plan", () => {
-    // The dangerous bug would be an unknown plan reading as unlimited.
-    expect(scansPerWeek("unpaid")).toBe(0);
-    expect(scansPerWeek("Pro")).toBe(0);
-    expect(scansPerWeek("")).toBe(0);
+  it("falls back to the free allowance, never to unlimited", () => {
+    // Two failure modes to avoid: an unknown plan reading as unlimited, and a
+    // paying customer locked out by a typo. Free is the safe middle.
+    expect(scanLimit("unpaid")).toBe(10);   // historical alias
+    expect(scanLimit("Pro")).toBe(10);      // wrong case
+    expect(scanLimit("")).toBe(10);
+    expect(scanLimit("nonsense")).not.toBeNull();
   });
 
   it("only sells the plans that have a Stripe price", () => {
@@ -36,12 +38,16 @@ describe("plan limits", () => {
     expect(PLANS.enterprise.priceEnv).toBeUndefined();
   });
 
-  it("advertises a weekly scan count matching the enforced limit", () => {
-    // The pricing page renders these strings, the gate reads scansPerWeek.
-    for (const key of PURCHASABLE) {
+  it("advertises a scan count matching the enforced limit", () => {
+    // The pricing page renders these strings; the gate reads scanLimit.
+    for (const key of ["free", ...PURCHASABLE]) {
       const plan = PLANS[key];
-      expect(plan.features[0]).toBe(`${plan.scansPerWeek} scans per week`);
+      expect(plan.features[0]).toBe(`${plan.scansPerMonth} scans per month`);
     }
+  });
+
+  it("only sells Pro - free needs no checkout, enterprise is sales-led", () => {
+    expect([...PURCHASABLE]).toEqual(["pro"]);
   });
 });
 
@@ -52,18 +58,23 @@ describe("quota decisions", () => {
 
   it("refuses once the window is full, and says when it frees up", () => {
     const resetsAt = Math.floor(Date.now() / 1000) + QUOTA_WINDOW_SECONDS;
-    const verdict = decide(quota({ used: 20, remaining: 0, resetsAt }));
+    const verdict = decide(quota({ used: 10, remaining: 0, resetsAt }));
     expect(verdict.allowed).toBe(false);
-    expect(verdict.reason).toContain("20/20");
+    expect(verdict.reason).toContain("10/10");
     expect(verdict.reason).toContain("frees up");
   });
 
-  it("tells an unpaid account to pick a plan instead of showing a zero quota", () => {
-    const verdict = decide(quota({ plan: "unpaid", limit: 0, remaining: 0 }));
-    expect(verdict.allowed).toBe(false);
-    expect(verdict.reason).toContain("Choose a");
-    // "0/0 scans used" reads like a bug rather than a paywall.
-    expect(verdict.reason).not.toContain("0/0");
+  it("names the upgrade when a free account runs out, but not to a paying one", () => {
+    const exhausted = { used: 10, remaining: 0 };
+    expect(decide(quota(exhausted)).reason).toContain("$19");
+
+    const pro = decide(quota({ plan: "pro", limit: 50, used: 50, remaining: 0 }));
+    expect(pro.reason).not.toContain("$19");  // they already bought it
+  });
+
+  it("lets a new free account scan straight away", () => {
+    // The whole point of the free tier: install and get value with no card.
+    expect(decide(quota({ used: 0, remaining: 10 })).allowed).toBe(true);
   });
 
   it("never blocks enterprise on a count", () => {

@@ -1,4 +1,4 @@
-import { QUOTA_WINDOW_SECONDS, type Quota, scansPerWeek } from "./plans";
+import { DEFAULT_PLAN, QUOTA_WINDOW_SECONDS, type Quota, scanLimit } from "./plans";
 
 /**
  * Every D1 query lives here.
@@ -55,8 +55,8 @@ export async function upsertAccount(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO accounts (id, kind, email, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO accounts (id, kind, email, plan, created_at, updated_at)
+       VALUES (?, ?, ?, '${DEFAULT_PLAN}', ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          email = COALESCE(excluded.email, accounts.email),
          updated_at = excluded.updated_at`,
@@ -349,8 +349,8 @@ export async function recentScans(
  * a customer lock themselves out by clicking a disabled-looking button.
  */
 export async function quotaFor(db: D1Database, account: Account | null): Promise<Quota> {
-  const plan = account?.plan ?? "unpaid";
-  const limit = scansPerWeek(plan);
+  const plan = account?.plan ?? DEFAULT_PLAN;
+  const limit = scanLimit(plan);
   if (!account) {
     return { plan, limit, used: 0, remaining: limit, resetsAt: null };
   }

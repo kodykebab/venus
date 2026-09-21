@@ -12,8 +12,9 @@ import { AnthropicKeyPanel } from "./AnthropicKeyPanel";
  * The dashboard.
  *
  * style.md 30 and 48: it answers "how are my contracts doing?", and each
- * surface has exactly one dominant action. Unpaid, that action is choosing a
- * plan; paid, it is scanning a repository.
+ * surface has exactly one dominant action - here, scanning a repository. The
+ * upgrade prompt only appears once the free allowance is nearly gone, because
+ * a paywall on day one would undo the point of having a free tier.
  */
 
 const SCAN_STATE: Record<string, { label: string; tone: Tone }> = {
@@ -101,8 +102,11 @@ export function Dashboard() {
     );
   }
 
-  const paid = me.quota.limit === null || (me.quota.limit ?? 0) > 0;
   const canScan = me.quota.limit === null || (me.quota.remaining ?? 0) > 0;
+  // Nudge toward Pro only when the free allowance is nearly gone - an upgrade
+  // banner on day one is noise, and the free tier is meant to be usable.
+  const onFree = me.account.plan !== "pro" && me.account.plan !== "enterprise";
+  const runningLow = onFree && (me.quota.remaining ?? 0) <= 3;
 
   return (
     <>
@@ -119,7 +123,7 @@ export function Dashboard() {
 
       <Header me={me} />
       <Summary me={me} />
-      {!paid ? <PlanGate /> : null}
+      {runningLow ? <PlanGate remaining={me.quota.remaining ?? 0} /> : null}
       <Repositories
         me={me}
         canScan={canScan}
@@ -137,7 +141,7 @@ function Header({ me }: { me: Me }) {
   const plan = PLANS.find((p) => p.key === me.account.plan);
   const { remaining, limit } = me.quota;
 
-  let status = <Badge tone="warn">No plan</Badge>;
+  let status = <Badge>Free</Badge>;
   if (plan && limit === null) {
     status = <Badge tone="ok">{plan.label} plan</Badge>;
   } else if (plan) {
@@ -175,17 +179,17 @@ function Summary({ me }: { me: Me }) {
     quota.limit === null ? quota.used : `${quota.used}/${quota.limit}`;
   const quotaNote =
     quota.limit === null
-      ? "this week · no fixed cap"
+      ? "this month · no fixed cap"
       : quota.remaining === 0 && quota.resetsAt
         ? `quota frees up in ${until(quota.resetsAt)}`
-        : "used in the last 7 days";
+        : "used in the last 30 days";
 
   return (
     <Section eyebrow="At a glance">
       <div className="grid grid-4">
         <Stat label="Repositories" value={repositories} note="connected to ParaCheck" />
         <Stat
-          label="Scans this week"
+          label="Scans this month"
           value={quotaValue}
           note={quotaNote}
           tone={quota.limit !== null && quota.remaining === 0 ? "critical" : ""}
@@ -207,24 +211,27 @@ function Summary({ me }: { me: Me }) {
   );
 }
 
-function PlanGate() {
-  const hobby = PLANS[0];
-  const pro = PLANS[1];
+function PlanGate({ remaining }: { remaining: number }) {
+  const pro = PLANS.find((plan) => plan.key === "pro");
   return (
-    <Section eyebrow="Choose a plan">
+    <Section eyebrow={remaining === 0 ? "Out of scans" : "Running low"}>
       <Panel>
         <div style={{ display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
           <div>
-            <h3>Pull requests aren&rsquo;t being scanned yet.</h3>
+            <h3>
+              {remaining === 0
+                ? "You've used this month's free scans."
+                : `${remaining} free scan${remaining === 1 ? "" : "s"} left this month.`}
+            </h3>
             <p className="muted" style={{ fontSize: 14, marginTop: 6, maxWidth: "56ch" }}>
-              {hobby.label} is {hobby.price}
-              {hobby.cadence} for {hobby.scansPerWeek} scans a week, {pro.label} is {pro.price}
-              {pro.cadence} for {pro.scansPerWeek}.
+              {pro?.label} is {pro?.price}
+              {pro?.cadence} for {pro?.scansPerMonth} scans a month. Quota is counted over a
+              rolling 30 days, so it frees up continuously rather than on one day.
             </p>
           </div>
           <div className="btn-row" style={{ marginLeft: "auto" }}>
-            <Link className="btn" href="/pricing">
-              Choose a plan
+            <Link className="btn" href="/pricing/">
+              Upgrade to {pro?.label}
             </Link>
           </div>
         </div>

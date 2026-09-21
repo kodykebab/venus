@@ -2,39 +2,45 @@
  * Plans and quota.
  *
  * These numbers are the single source of truth: the pricing page, the
- * dashboard, the checkout selector and the gate that actually refuses a scan
- * all read them from here, so they cannot drift apart.
+ * dashboard, the checkout and the gate that actually refuses a scan all read
+ * them from here, so they cannot drift apart.
  *
- * Quotas are per rolling seven days, not per billing period. A scan compiles
- * and analyses an arbitrary repository, so the cost is CPU and minutes and has
- * to be bounded at the rate it is incurred rather than granted monthly.
+ * Quotas are per rolling 30 days rather than per calendar month or per billing
+ * period. Counting from the scans actually run means there is no balance to
+ * replenish and therefore no reset to miss - a Stripe event that never arrives
+ * cannot leave a paying account throttled to zero - and quota frees up
+ * continuously instead of everyone's usage spiking on the 1st.
+ *
+ * Note on what a quota is for here: the analysis runs on the customer's own
+ * GitHub Actions runner, so a scan costs us essentially nothing. These limits
+ * are a monetisation boundary, not cost control. That is why the free tier can
+ * be genuinely useful rather than a crippled demo.
  */
 
-export type PlanKey = "hobby" | "pro" | "enterprise" | "unpaid";
+export type PlanKey = "free" | "pro" | "enterprise";
 
 export interface Plan {
   key: PlanKey;
   label: string;
   price: string;
   cadence: string;
-  /** Scans per rolling week. null means no fixed cap (enterprise only). */
-  scansPerWeek: number | null;
-  priceEnv?: "STRIPE_HOBBY_PRICE_ID" | "STRIPE_PRO_PRICE_ID";
+  /** Scans per rolling 30 days. null means no fixed cap (enterprise only). */
+  scansPerMonth: number | null;
+  priceEnv?: "STRIPE_PRO_PRICE_ID";
   blurb: string;
   features: string[];
 }
 
 export const PLANS: Record<string, Plan> = {
-  hobby: {
-    key: "hobby",
-    label: "Hobby",
-    price: "$9",
-    cadence: "/month",
-    scansPerWeek: 20,
-    priceEnv: "STRIPE_HOBBY_PRICE_ID",
-    blurb: "For a developer keeping one or two contracts honest.",
+  free: {
+    key: "free",
+    label: "Free",
+    price: "$0",
+    cadence: "",
+    scansPerMonth: 10,
+    blurb: "Enough to keep a contract honest and see what this finds.",
     features: [
-      "20 scans per week",
+      "10 scans per month",
       "GitHub PR Check Runs and inline annotations",
       "Static analysis: Slither + hot-slot classifier",
       "Dynamic contention analysis",
@@ -43,14 +49,14 @@ export const PLANS: Record<string, Plan> = {
   pro: {
     key: "pro",
     label: "Pro",
-    price: "$29",
+    price: "$19",
     cadence: "/month",
-    scansPerWeek: 100,
+    scansPerMonth: 50,
     priceEnv: "STRIPE_PRO_PRICE_ID",
     blurb: "For a team shipping to a parallel-execution chain.",
     features: [
-      "100 scans per week",
-      "Everything in Hobby",
+      "50 scans per month",
+      "Everything in Free",
       "Unlimited repositories per installation",
       "Merge gating on severity thresholds",
     ],
@@ -60,10 +66,10 @@ export const PLANS: Record<string, Plan> = {
     label: "Enterprise",
     price: "Custom",
     cadence: "",
-    scansPerWeek: null,
+    scansPerMonth: null,
     blurb: "For protocols with their own volume, deployment and support needs.",
     features: [
-      "Custom weekly scan quota",
+      "Custom monthly scan quota",
       "Everything in Pro",
       "Self-hosted or dedicated deployment options",
       "Direct support channel",
@@ -71,20 +77,28 @@ export const PLANS: Record<string, Plan> = {
   },
 };
 
-/** Plans that can be bought online. Enterprise is sales-led. */
-export const PURCHASABLE = ["hobby", "pro"] as const;
+/** Plans that can be bought online. Free needs no checkout; Enterprise is sales-led. */
+export const PURCHASABLE = ["pro"] as const;
 
-export const QUOTA_WINDOW_SECONDS = 7 * 24 * 3600;
+/** The default an account lands on, and the one a cancelled subscription returns to. */
+export const DEFAULT_PLAN: PlanKey = "free";
+
+export const QUOTA_WINDOW_SECONDS = 30 * 24 * 3600;
 
 /**
- * Scans permitted per rolling week. `null` is "no fixed cap" and is only ever
- * enterprise; an unpaid or unrecognised plan is 0, never unlimited - a typo in
- * a plan name must fail closed.
+ * Scans permitted per rolling 30 days.
+ *
+ * `null` is "no fixed cap" and is only ever enterprise. An unrecognised plan
+ * falls back to the free allowance rather than zero: the failure mode of a
+ * typo should be a customer getting the free tier, not a paying customer
+ * locked out. "unpaid" is accepted as a historical alias for free, since
+ * cancelling a subscription returns an account to the free tier.
  */
-export function scansPerWeek(plan: string): number | null {
+export function scanLimit(plan: string): number | null {
   if (plan === "enterprise") return null;
   const found = PLANS[plan];
-  return found && found.key !== "enterprise" ? found.scansPerWeek : 0;
+  if (found && found.key !== "enterprise") return found.scansPerMonth;
+  return PLANS.free.scansPerMonth;
 }
 
 export interface Quota {
@@ -105,20 +119,18 @@ export function decide(quota: Quota): QuotaDecision {
   if (quota.limit === null) {
     return { allowed: true, reason: "", quota };
   }
-  if (quota.limit === 0) {
-    // Unpaid, lapsed, or an unknown plan. Say what to do rather than reporting
-    // a quota of zero, which reads like a bug rather than a paywall.
-    return {
-      allowed: false,
-      reason: "Choose a Hobby or Pro plan to start scanning.",
-      quota,
-    };
-  }
   if (quota.used >= quota.limit) {
     const when = quota.resetsAt ? ` Quota frees up in ${humanUntil(quota.resetsAt)}.` : "";
+    const upgrade =
+      quota.plan === "pro" || quota.plan === "enterprise"
+        ? ""
+        : ` ${PLANS.pro.label} is ${PLANS.pro.price}${PLANS.pro.cadence} for ${PLANS.pro.scansPerMonth}.`;
     return {
       allowed: false,
-      reason: `This week's quota is used up (${quota.used}/${quota.limit} scans in the last 7 days).${when}`,
+      reason:
+        `This month's quota is used up (${quota.used}/${quota.limit} scans in the last 30 days).` +
+        when +
+        upgrade,
       quota,
     };
   }
