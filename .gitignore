@@ -40,3 +40,7 @@ web/out/
 
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Foundry fixture build output
+analyzer/proof/fixtures/**/out/
+analyzer/proof/fixtures/**/cache/

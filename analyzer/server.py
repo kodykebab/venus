@@ -275,6 +275,26 @@ def summarize(report: dict, target: str, anthropic_key: str | None) -> tuple[str
     return None, render_markdown(report, target)
 
 
+def check_run_title(total: int, proven: int) -> str:
+    """The check-run headline leads with what reproduces, because that is the
+    number worth a developer's attention."""
+    if total == 0:
+        return "No findings"
+    if proven == 0:
+        return f"{total} unproven lead{'' if total == 1 else 's'}"
+    leads = total - proven
+    tail = f", {leads} lead{'' if leads == 1 else 's'}" if leads else ""
+    return f"{proven} proven finding{'' if proven == 1 else 's'}{tail}"
+
+
+def scan_message(total: int, proven: int) -> str:
+    if total == 0:
+        return "No findings."
+    if proven == 0:
+        return f"{total} unproven lead{'' if total == 1 else 's'}."
+    return f"{proven} proven, {total - proven} lead{'' if total - proven == 1 else 's'}."
+
+
 def run_scan(job: dict) -> dict:
     repository = job["repository"]
     token = job["githubToken"]
@@ -320,6 +340,21 @@ def run_scan(job: dict) -> dict:
             if finding.get("file", "").startswith(prefix):
                 finding["file"] = finding["file"][len(prefix):]
 
+        # Attempt to prove what can be proven. This is what promotes a finding
+        # from an unproven lead to tier A - a generated exploit test that fails
+        # on this code and passes against its fix. Runs inside the same scrubbed
+        # environment as the build, and no-ops without forge or a key, so a scan
+        # never depends on it.
+        try:
+            from proof.scan import prove_findings
+
+            with sandbox.scrubbed_environ(workdir):
+                proven = prove_findings(report.get("findings", []), workdir, job.get("anthropicKey"))
+            if proven:
+                print(f"analyzer: promoted {proven} finding(s) to proven with a reproducing PoC")
+        except Exception as exc:  # proof is an enhancement, never a scan blocker
+            print(f"analyzer: proof step skipped ({type(exc).__name__}: {exc})")
+
         if report.get("unanalyzable"):
             reason = report.get("reason", "unknown reason")
             if check_run_id:
@@ -331,13 +366,13 @@ def run_scan(job: dict) -> dict:
         target = ", ".join(targets[:3])
         verdict, summary = summarize(report, target, job.get("anthropicKey"))
 
+        proven_count = sum(1 for f in findings if f.get("evidence", "D") in ("A", "B"))
+
         if check_run_id:
             complete_check_run(
                 repository, check_run_id, token,
                 conclusion=conclusion_for(findings, FAIL_ON),
-                title=(f"{len(findings)} optimisation "
-                       f"{'opportunity' if len(findings) == 1 else 'opportunities'}"
-                       if findings else "No findings"),
+                title=check_run_title(len(findings), proven_count),
                 summary=summary,
                 annotations=build_annotations(findings),
             )
@@ -345,10 +380,10 @@ def run_scan(job: dict) -> dict:
         return {
             "state": "done",
             "findings": len(findings),
+            "provenFindings": proven_count,
             "verdict": verdict,
             "headSha": head_sha,
-            "message": (f"{len(findings)} opportunit"
-                        f"{'y' if len(findings) == 1 else 'ies'} found."),
+            "message": scan_message(len(findings), proven_count),
         }
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

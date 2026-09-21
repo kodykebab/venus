@@ -30,9 +30,11 @@ sys.path.insert(0, os.path.join(PARACHECK, "analyzer", "llm"))
 # Reuse the analyzer's own Check Run helpers rather than a second copy of them.
 from server import (  # noqa: E402
     build_annotations,
+    check_run_title,
     complete_check_run,
     conclusion_for,
     create_check_run,
+    scan_message,
     solidity_files,
     summarize,
 )
@@ -201,6 +203,20 @@ def main() -> int:
         if finding.get("file", "").startswith(prefix):
             finding["file"] = finding["file"][len(prefix):]
 
+    # Prove what can be proven, on the customer's own runner. This is where an
+    # unproven lead becomes a tier-A finding with a reproducing exploit test.
+    # No-ops without forge or a key, so a scan never depends on it.
+    try:
+        from proof.scan import prove_findings
+
+        with sandbox.scrubbed_environ(root):
+            proven = prove_findings(report_data.get("findings", []), root,
+                                    os.environ.get("ANTHROPIC_API_KEY") or None)
+        if proven:
+            print(f"ParaCheck: promoted {proven} finding(s) to proven with a reproducing PoC.")
+    except Exception as exc:  # proof is an enhancement, never a scan blocker
+        print(f"ParaCheck: proof step skipped ({type(exc).__name__}: {exc})")
+
     if report_data.get("unanalyzable"):
         reason = report_data.get("reason", "unknown reason")
         print(f"::warning title=ParaCheck::{reason}")
@@ -213,24 +229,24 @@ def main() -> int:
     findings = report_data.get("findings", [])
     verdict, summary = summarize(report_data, ", ".join(scoped[:3]),
                                  os.environ.get("ANTHROPIC_API_KEY") or None)
+    proven_count = sum(1 for f in findings if f.get("evidence", "D") in ("A", "B"))
 
     conclusion = conclusion_for(findings, fail_on or None)
     if check_run_id:
         complete_check_run(
             repository, check_run_id, token,
             conclusion=conclusion,
-            title=(f"{len(findings)} optimisation "
-                   f"{'opportunity' if len(findings) == 1 else 'opportunities'}"
-                   if findings else "No findings"),
+            title=check_run_title(len(findings), proven_count),
             summary=summary,
             annotations=build_annotations(findings),
         )
 
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
         handle.write(f"findings={len(findings)}\n")
+        handle.write(f"proven={proven_count}\n")
 
     report("done", findings=len(findings), verdict=verdict,
-           message=f"{len(findings)} opportunit{'y' if len(findings) == 1 else 'ies'} found.",
+           message=scan_message(len(findings), proven_count),
            findings_detail=findings)
 
     print(summary)

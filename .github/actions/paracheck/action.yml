@@ -123,6 +123,14 @@ runs:
         solc-select install 0.8.24 >/dev/null 2>&1 || true
         solc-select use 0.8.24 --always-install >/dev/null 2>&1 || true
 
+    # Foundry powers the proof engine: it runs the generated exploit test to
+    # decide whether a finding reproduces. The scan degrades gracefully without
+    # it (findings stay unproven leads), so this is best-effort.
+    - name: Install Foundry
+      if: steps.claim.outputs.skip != 'true'
+      uses: foundry-rs/foundry-toolchain@v1
+      continue-on-error: true
+
     - id: analyze
       if: steps.claim.outputs.skip != 'true'
       shell: bash
