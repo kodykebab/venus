@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useState } from "react";
 
 import { api, ApiError, type Me, type Quota, type Scan, type ScanDetail } from "@/lib/api";
 import { PLANS } from "@/lib/plans";
@@ -32,7 +32,7 @@ const SCAN_STATE: Record<string, { label: string; tone: Tone }> = {
 export function Dashboard() {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ReactNode>(null);
   const [scanning, setScanning] = useState<string | null>(null);
   const [settingUp, setSettingUp] = useState<string | null>(null);
 
@@ -93,12 +93,20 @@ export function Dashboard() {
         method: "POST",
         body: { installationId, repository },
       });
-      // Opened in a new tab rather than navigated to: the dashboard is where
-      // the next action (Scan now, once it's merged) still needs to happen.
+      // Best-effort new tab, but never rely on it: this runs after an await, so
+      // the click's user-activation is gone and the browser will usually block
+      // the popup. The link in the notice is the dependable path - without it a
+      // blocked popup looks exactly like "nothing happened".
       window.open(prUrl, "_blank", "noopener,noreferrer");
       setNotice(
-        "Opened a pull request adding the workflow file. Nothing runs until you merge it " +
-          "- once you do, Scan now and pull-request scans both start working for this repository.",
+        <>
+          Opened a pull request adding the workflow file.{" "}
+          <a href={prUrl} target="_blank" rel="noopener noreferrer">
+            Review and merge it
+          </a>{" "}
+          - nothing runs until you do. Once merged, Scan now and pull-request scans both start
+          working for this repository.
+        </>,
       );
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not set up that repository.");
