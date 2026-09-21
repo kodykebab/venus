@@ -428,6 +428,8 @@ export async function proposeWorkflowFile(
     }
   }
 
+  console.log(`proposeWorkflowFile: branch=${branchResponse.status} file=${fileResponse.status} base=${base}`);
+
   const prResponse = await fetch(`${API}/repos/${repository}/pulls`, {
     method: "POST",
     headers: auth,
@@ -445,9 +447,19 @@ export async function proposeWorkflowFile(
     }),
   });
   if (!prResponse.ok) {
+    // Surface GitHub's own message: 403 means Pull requests write is not
+    // effective; 422 usually means the branch has no commit the base lacks.
+    const detail = await prResponse.text().catch(() => "");
+    console.log(`proposeWorkflowFile: pulls POST -> ${prResponse.status} ${detail.slice(0, 300)}`);
     const again = await findOpenPr(repository, auth, base);
     if (again) return { ok: true, reason: "", prUrl: again };
-    return { ok: false, reason: `Could not open the pull request (${prResponse.status}).` };
+    const hint =
+      prResponse.status === 403
+        ? " The App has no Pull requests write access on this installation yet - approve the permission update, then try again."
+        : prResponse.status === 422
+          ? " GitHub reports nothing to open a PR from - the workflow file may already be on the default branch."
+          : "";
+    return { ok: false, reason: `Could not open the pull request (${prResponse.status}).${hint}` };
   }
   const pr = (await prResponse.json()) as { html_url: string };
   return { ok: true, reason: "", prUrl: pr.html_url };
