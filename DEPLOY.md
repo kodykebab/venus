@@ -1,31 +1,55 @@
 # Deploying ParaCheck
 
 ```
-Cloudflare Pages            Next.js app (marketing + dashboard), Clerk sign-in
+Cloudflare Worker (static assets)   the Next.js site, Clerk sign-in
         |
         v  fetch with a Clerk token
-Cloudflare Worker           identity, billing, quota, webhooks  ->  D1 + Queues
+Cloudflare Worker (control plane)   identity, billing, quota, webhooks  ->  D1
         |
-        v  queue consumer
-Cloudflare Container        git clone, Foundry, solc, Slither  ->  GitHub Check Run
+        v  workflow_dispatch / the repo's own pull_request trigger
+GitHub Actions (customer's runner)  git, Foundry, solc, Slither  ->  GitHub Check Run
+        |
+        +-- authenticates back with a GitHub OIDC token, not a secret
 ```
 
-The Worker is the control plane and never compiles anything. The container is
-the only part that sees customer source.
+The Worker is the control plane. It never compiles anything and never receives
+a copy of customer source — the analysis runs where the code already is.
 
-Containers and Queues both require a **paid Workers plan**.
+**Everything here runs on free tiers.** Workers, D1 and static assets are all
+within the free plan. There is no container and no queue: Cloudflare Containers
+require Workers Paid, which is what moved the compute to GitHub Actions.
 
 ---
 
-## 1. Accounts and secrets you need first
+## What is live now
 
-| Where | What | Notes |
+| Piece | URL |
+| --- | --- |
+| Site | https://paracheck-web.kritarthshankr.workers.dev |
+| API | https://paracheck-control-plane.kritarthshankr.workers.dev |
+| Health | `/api/health` → `{"ok": true, "missing": []}` |
+| GitHub App | https://github.com/apps/paracheck (App ID 5015487) |
+
+Plans, from `cloudflare/src/plans.ts`:
+
+| Plan | Price | Scans / rolling 30 days |
 | --- | --- | --- |
-| Cloudflare | account + paid Workers plan | Containers and Queues are not on the free plan |
-| GitHub | a GitHub App | created in step 5, after you know your Worker URL |
-| Clerk | an application | publishable key (public) + secret key |
-| Stripe | two recurring Prices | $9/month and $29/month |
-| Anthropic | nothing | customers bring their own key; you never pay for inference |
+| Free | $0 | 10 |
+| Pro | $24.99/mo | 100 |
+| Team | $49.99/mo | 250 |
+| Enterprise | custom | agreed in the contract |
+
+---
+
+## 1. Accounts you need
+
+| Where | What |
+| --- | --- |
+| Cloudflare | free account; `wrangler login` needs the `containers:write` scope only if you ever go back to Containers |
+| GitHub | a GitHub App (below) |
+| Clerk | an application — publishable key (public) + secret key |
+| Stripe | two recurring Prices, for Pro and Team |
+| Anthropic | nothing. Customers bring their own key; you never pay for inference |
 
 ---
 
@@ -34,33 +58,30 @@ Containers and Queues both require a **paid Workers plan**.
 > **Applying `schema.sql` to a database that already has tables does almost
 > nothing.** Every statement is `CREATE TABLE IF NOT EXISTS`, which is exactly
 > as quiet when the existing table is wrong as when it is right. This bit us
-> once: the database kept an earlier scaffold's `accounts` table for several
+> once: the database kept an earlier scaffold's `accounts` table across several
 > deploys, and the first signed-in request would have failed on a missing
-> column. After applying the schema, check the tables actually match:
+> column. Always check afterwards:
 >
 > ```bash
 > npx wrangler d1 execute paracheck --remote --command "PRAGMA table_info(accounts)"
 > ```
 >
-> To replace a table that has diverged, rename it rather than dropping it -
-> `ALTER TABLE accounts RENAME TO accounts_old` - then re-apply the schema.
+> To replace a table that has diverged, rename rather than drop —
+> `ALTER TABLE accounts RENAME TO accounts_old` — then re-apply the schema.
 
 ```bash
 cd cloudflare
-npm install
+npm install                               # needs Node 22+ for wrangler 4
 npx wrangler login
 
-# D1
-npx wrangler d1 create paracheck          # copy the database_id into wrangler.toml
+npx wrangler d1 create paracheck          # copy database_id into wrangler.toml
 npm run db:remote                         # applies schema.sql
-
-# Queues
-npx wrangler queues create paracheck-scans
-npx wrangler queues create paracheck-scans-dlq
 ```
 
-Set `database_id` in `wrangler.toml` to the id D1 printed, and `PUBLIC_URL` to
-the domain the Next.js app will be served from.
+Set `database_id` and `PUBLIC_URL` in `wrangler.toml`. `PUBLIC_URL` must be the
+exact origin the site is served from: CORS reflects only that value, so a stale
+one means every dashboard call is blocked by the browser with nothing in the
+server logs.
 
 ---
 
@@ -68,159 +89,174 @@ the domain the Next.js app will be served from.
 
 ```bash
 cd cloudflare
-for s in CLERK_SECRET_KEY GITHUB_APP_ID GITHUB_WEBHOOK_SECRET \
-         GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET \
+for s in CLERK_SECRET_KEY GITHUB_APP_ID GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET \
+         GITHUB_WEBHOOK_SECRET ENCRYPTION_KEY \
          STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
-         STRIPE_HOBBY_PRICE_ID STRIPE_PRO_PRICE_ID ENCRYPTION_KEY; do
+         STRIPE_PRO_PRICE_ID STRIPE_TEAM_PRICE_ID; do
   npx wrangler secret put "$s"
 done
 
-# From the file, not pasted as one line - a PEM mangled into literal \n looks
-# set and then fails at the first token mint, inside a queue consumer.
+# From the file, never pasted as one line: a PEM mangled into literal \n looks
+# set and then fails at the first token mint.
 npx wrangler secret put GITHUB_APP_PRIVATE_KEY < your-app.private-key.pem
 ```
 
-`ENCRYPTION_KEY` is yours to generate and encrypts customers' Anthropic keys at
-rest: `openssl rand -base64 32`. **Rotating it makes every stored key
+`ENCRYPTION_KEY` is yours to generate (`openssl rand -base64 32`) and encrypts
+customers' Anthropic keys at rest. **Rotating it makes every stored key
 unreadable** — scans keep working, they just fall back to deterministic
 findings until each customer re-enters a key.
 
+GitHub issues **PKCS#1** private keys (`BEGIN RSA PRIVATE KEY`). The Worker
+converts them; no need to run `openssl pkcs8` first.
+
 ---
 
-## 4. Deploy the Worker and container
-
-`wrangler deploy` builds `Dockerfile.analyzer`, pushes it to Cloudflare's
-registry and rolls out the Worker together:
+## 4. Deploy
 
 ```bash
-cd cloudflare
-npx wrangler deploy
-curl https://<your-worker>.workers.dev/api/health
+cd cloudflare && npx wrangler deploy
+cd ../web && npm run build && npx wrangler deploy
+curl https://<worker>/api/health
 ```
 
-`/api/health` names anything still unconfigured. It should report
-`{"ok": true, "missing": []}` before you point GitHub at it.
+The site is an assets-only Worker, not a Pages project: `wrangler pages`
+assumes an SSR Next.js app and tries to convert the project to OpenNext. This
+export is fully static.
 
 ---
 
 ## 5. The GitHub App
 
-Create it at **Settings → Developer settings → GitHub Apps → New**.
+Create at **github.com/settings/apps/new**.
 
 | Field | Value |
 | --- | --- |
-| Homepage URL | your Pages URL |
-| Callback URL | `https://<worker>/api/install/callback` |
-| Setup URL | `https://<worker>/api/install/callback` |
+| Homepage URL | the site URL |
+| Redirect URI | `https://<worker>/api/install/callback` |
 | Request user authorization (OAuth) during installation | **on** |
 | Webhook URL | `https://<worker>/api/webhooks/github` |
-| Webhook secret | the same value you set as `GITHUB_WEBHOOK_SECRET` |
+| Webhook secret | same value as `GITHUB_WEBHOOK_SECRET` |
+| Where can this be installed | **Any account** |
 
-Repository permissions: **Contents: read**, **Pull requests: read**, **Checks:
-read & write**, **Metadata: read**.
-Subscribe to: **Installation**, **Installation repositories**, **Pull request**.
+Repository permissions: **Contents** read · **Metadata** read · **Pull
+requests** read · **Checks** read & write · **Actions** read & write (the Scan
+now button dispatches a workflow).
 
-Put the App's slug in `wrangler.toml` as `GITHUB_APP_SLUG`, then redeploy.
+Subscribe to: **Pull request**. `Installation` and `Installation repositories`
+are delivered to Apps automatically and are not in the subscribe list.
+
+Put the App's slug in `wrangler.toml` as `GITHUB_APP_SLUG`.
 
 ---
 
 ## 6. Stripe
 
-Create one product with two recurring monthly Prices — $9 (Hobby) and $29 (Pro)
-— and set their ids as `STRIPE_HOBBY_PRICE_ID` / `STRIPE_PRO_PRICE_ID`.
+Create two recurring monthly Prices — Pro and Team — and set their `price_...`
+ids. The `prod_...` id is the product, not the price; only the price id works.
 
-Add a webhook endpoint at `https://<worker>/api/webhooks/stripe` subscribed to:
+The webhook endpoint can be created from the API, which also returns its
+signing secret:
 
+```bash
+curl -s https://api.stripe.com/v1/webhook_endpoints -u "$STRIPE_SECRET_KEY:" \
+  -d "url=https://<worker>/api/webhooks/stripe" \
+  -d "enabled_events[]=checkout.session.completed" \
+  -d "enabled_events[]=invoice.paid" \
+  -d "enabled_events[]=invoice.payment_failed" \
+  -d "enabled_events[]=customer.subscription.updated" \
+  -d "enabled_events[]=customer.subscription.deleted"
 ```
-checkout.session.completed
-invoice.paid
-invoice.payment_failed
-customer.subscription.updated
-customer.subscription.deleted
-```
 
-The signing secret is `STRIPE_WEBHOOK_SECRET`.
+**The amounts in Stripe are not read by the app.** Published prices live in
+`cloudflare/src/plans.ts` and `web/lib/plans.ts`. Change one and you must change
+all three, or the page advertises a price the card is not charged.
 
-The **amounts in Stripe are not read by the app** — the published prices live in
-`cloudflare/src/plans.ts` and `web/lib/plans.ts`. If you change one, change all
-three, or the page advertises a price the card is not charged.
+Going live is the same four values again from live mode, plus a second webhook
+endpoint.
 
 ---
 
 ## 7. Clerk
 
-Create an application, then set:
-
 - `CLERK_SECRET_KEY` as a Worker secret
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` as a Pages build variable
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` as a build variable for the site
 
-In Clerk, add your Pages domain to the allowed origins. If you pin `iss`/`aud`,
-set `CLERK_ISSUER` / `CLERK_AUDIENCE` in `wrangler.toml`; leave them empty
-otherwise — an empty string would be compared literally and reject every token.
+Add the site's domain to Clerk's allowed origins. If you pin `iss`/`aud`, set
+`CLERK_ISSUER` / `CLERK_AUDIENCE` in `wrangler.toml`; leave them empty
+otherwise — an empty string is compared literally and rejects every token.
 
 ---
 
-## 8. The Next.js app on Pages
+## 8. The customer's side
 
-```bash
-cd web
-npm install
-npm run build          # static export into web/out
-npx wrangler pages deploy out --project-name paracheck
-```
+The repository containing `.github/actions/paracheck` must be **public**, since
+customer workflows check it out.
 
-Build-time variables:
+Customers add `.github/workflows/paracheck.yml` (copy from this repo). It needs
+`id-token: write`, which is what lets the run prove which repository it is
+without any secret to configure.
+
+---
+
+## 9. Verify
+
+Build variables for the site:
 
 | Variable | Value |
 | --- | --- |
-| `NEXT_PUBLIC_API_URL` | your Worker's URL |
+| `NEXT_PUBLIC_API_URL` | the Worker's URL |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
 | `NEXT_PUBLIC_SALES_EMAIL` | where Enterprise enquiries go |
-| `NEXT_PUBLIC_SITE_URL` | the Pages URL, for metadata |
+| `NEXT_PUBLIC_SITE_URL` | the site URL, for metadata |
 
-These are compiled into the bundle, so a change needs a rebuild, and none of
-them may be a secret.
+These compile into the bundle, so a change needs a rebuild, and none may be a
+secret.
 
----
+Then:
 
-## 9. Check it end to end
-
-1. `GET /api/health` → `{"ok": true}`.
-2. Sign in on the site; the dashboard loads and shows no plan.
-3. Subscribe with Stripe test card `4242 4242 4242 4242`; the plan appears.
-4. **Connect GitHub**, install on one repository.
-5. **Scan now** on that repository → a Check Run appears on the default branch.
-6. Open a pull request touching a `.sol` file → a Check Run appears on the PR.
-7. Exhaust the weekly quota and confirm the refusal says when it frees up.
+1. `GET /api/health` → `{"ok": true, "missing": []}`
+2. Sign in; the dashboard loads on the Free plan with 10 scans
+3. **Connect GitHub**, install on one repository
+4. Add the workflow file, open a pull request touching a `.sol` file → a Check
+   Run appears
+5. **Scan now** on the dashboard → a Check Run on the default branch
+6. Subscribe with test card `4242 4242 4242 4242` → plan changes
+7. Exhaust the quota and confirm the refusal says when it frees up
 
 ---
 
 ## Security notes worth keeping
 
-Analysing a repository means running its build system, and `forge install` and
-`npm install` execute arbitrary code by design. Three layers, none sufficient
-alone:
+The analysis runs on the customer's runner, so the untrusted build executes on
+GitHub's ephemeral infrastructure rather than ours, and we never hold their
+source. Inside that job, `analyzer/static/sandbox.py` still applies: build tools
+get an allowlisted environment rather than the job's own — which holds
+`GITHUB_TOKEN` and, when supplied, an Anthropic key — and CPU, memory, file size
+and process count are capped.
 
-- **Egress allowlist** (`cloudflare/src/analyzer.ts`) — container internet
-  access is off by default and only the hosts a Solidity toolchain needs are
-  reachable. A script that steals a secret has nowhere to send it. Widening
-  `allowedHosts` widens exactly this.
-- **Process sandbox** (`analyzer/static/sandbox.py`) — build tools get an
-  allowlisted environment rather than the process's own, `HOME` points at the
-  disposable checkout, and CPU, memory, file size and process count are capped.
-- **Image** (`Dockerfile.analyzer`) — unprivileged user owning none of its own
-  code, read-only compiler cache owned by root.
+Runs authenticate with a **GitHub Actions OIDC token**, verified against
+GitHub's public keys with the audience pinned. There is no shared secret for a
+customer to store, and a token minted for another service will not verify here.
 
-Quota is counted from the `scans` table over a rolling seven days rather than
-granted at checkout. There is no balance to replenish, so a missed recurring
-Stripe event cannot leave a paying account throttled to zero.
+Quota is counted from the `scans` table over a rolling 30 days rather than
+granted at checkout. There is no balance to replenish, so a missed Stripe event
+cannot leave a paying account throttled to zero.
 
-## Known gaps
+---
 
-- Nothing here has run against a deployed Worker, a real Clerk session or a
-  real Stripe checkout.
-- The image pre-caches solc 0.8.19, 0.8.20, 0.8.24 and 0.8.28. Foundry resolves
-  the newest version matching a project's pragma and downloads anything else on
-  first use; that path needs verifying on real amd64 hardware.
-- `service/` still contains the previous FastAPI control plane. It is no longer
-  the deployment target and can be deleted once the Worker is proven.
+## Verified, and not
+
+**Verified live:** the Worker and site deploy and serve; `/api/health` reports
+ok; the GitHub App JWT authenticates as ParaCheck; Stripe checkout sessions
+build for both plans at the advertised amounts; and the Stripe webhook path was
+exercised against the deployed Worker — a signed event writes the plan to D1, a
+replayed event id is ignored as a duplicate, and forged, stale and unsigned
+deliveries are all rejected with 401.
+
+**Not yet verified:** a real end-to-end scan. Nobody has installed the App on a
+repository, run the workflow, or had a Check Run posted. The OIDC claim path
+and the analyzer's behaviour on a real project are untested in production.
+
+**Credentials that need rotating before launch:** the GitHub App private key,
+its client secret, and the Clerk secret key all passed through a chat
+transcript during setup.
