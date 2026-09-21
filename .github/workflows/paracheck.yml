@@ -38,6 +38,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: TEMP DEBUG - inspect solc download under our exact scrubbed env
+        run: |
+          set -x
+          echo "real SVM_ROOT: ${SVM_ROOT:-<unset>}"
+          echo "real HOME: $HOME"
+          ls -la "$HOME/.svm" 2>&1 || echo "no real ~/.svm"
+          DEBUG_HOME="$GITHUB_WORKSPACE/contracts"
+          mkdir -p "$DEBUG_HOME"
+          env -i HOME="$DEBUG_HOME" TMPDIR="$DEBUG_HOME" PATH="$PATH" LANG="$LANG"             bash -c 'cd "$0" && forge build --build-info 2>&1 | tail -30; echo "--- svm dir after ---"; find "$HOME/.svm" -maxdepth 3 2>&1; echo "--- file type ---"; find "$HOME/.svm" -name "solc-*" -exec file {} \; 2>&1; echo "--- size ---"; find "$HOME/.svm" -name "solc-*" -exec ls -la {} \; 2>&1' "$DEBUG_HOME"
+        continue-on-error: true
+
       - name: Analyze with ParaCheck
         uses: kodykebab/venus/.github/actions/paracheck@main
         with:
