@@ -220,6 +220,31 @@ def _anchor_path(path: str | None, base: str) -> str | None:
         return _normalize(path)
 
 
+# forge resolves an unpinned `pragma solidity ^X.Y.Z` to whatever it judges the
+# newest matching release, and that resolution can land on a version whose
+# published binary is broken for a given platform - seen independently as
+# "Exec format error" on a native Linux runner and "Broken pipe" under Docker
+# emulation, same solc version, unrelated environments. crytic-compile reports
+# this as "<path>/out/build-info is not a directory", which reads as our
+# product being broken rather than what it actually is: forge auto-selected a
+# compiler release nobody has verified works. Detected here and reworded,
+# because "pin solc_version" is a one-line fix a customer can act on and the
+# raw message gives them nothing to act on at all.
+_BROKEN_TOOLCHAIN_MARKERS = ("exec format error", "broken pipe", "is not a directory")
+
+
+def _diagnose_compile_error(exc: Exception) -> str:
+    text = str(exc)
+    if any(marker in text.lower() for marker in _BROKEN_TOOLCHAIN_MARKERS):
+        return (
+            f"{text} - this usually means the Solidity compiler version forge "
+            "auto-selected has a broken binary for this platform, not a problem "
+            "with the contract. Pin solc_version in foundry.toml to a version "
+            "you know builds (e.g. \"0.8.24\") to fix it."
+        )
+    return text
+
+
 def review_project(
     root: str,
     changed_files: list[str] | None = None,
@@ -255,7 +280,7 @@ def review_project(
     except Exception as exc:  # noqa: BLE001
         return {
             "unanalyzable": True,
-            "reason": f"{UNANALYZABLE_MESSAGE} (compile error: {exc})",
+            "reason": f"{UNANALYZABLE_MESSAGE} (compile error: {_diagnose_compile_error(exc)})",
             "contracts": [],
             "findings": [],
             "project": {"framework": project.framework, "root": project.root},
