@@ -1,0 +1,142 @@
+name: "ParaCheck"
+description: >-
+  Finds the storage, execution and parallelism patterns making a Solidity
+  contract expensive, and posts them as a GitHub Check Run.
+author: "kodykebab"
+
+inputs:
+  target:
+    description: "Project directory or a single .sol file. Defaults to the repository root."
+    required: false
+    default: "."
+  chain:
+    description: >-
+      Target chain key or id (monad, sei, base, ethereum, 10143, ...).
+      Parallelism findings are only reported for chains that execute in parallel.
+    required: false
+    default: "monad"
+  fail-on:
+    description: >-
+      Fail the check if any finding is at or above this severity
+      (critical|high|medium|low). Empty means report only.
+    required: false
+    default: ""
+  min-severity:
+    description: "Drop findings below this severity from the report entirely."
+    required: false
+    default: "low"
+  api-url:
+    description: "ParaCheck API. Override only when self-hosting the control plane."
+    required: false
+    default: "https://paracheck-control-plane.kritarthshankr.workers.dev"
+  github-token:
+    description: "Token used to post the Check Run. The workflow's own GITHUB_TOKEN is right."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  findings:
+    description: "Number of findings reported."
+    value: ${{ steps.analyze.outputs.findings }}
+  scan-id:
+    description: "The ParaCheck scan id, for looking it up in the dashboard."
+    value: ${{ steps.claim.outputs.scan-id }}
+
+runs:
+  using: composite
+  steps:
+    # Ask permission before doing any work. This is where the weekly quota is
+    # enforced: the workflow also fires on the repository's own pull_request
+    # trigger, which ParaCheck never sent, so this is the only point every run
+    # passes through.
+    - id: claim
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+      run: |
+        set -euo pipefail
+
+        # GitHub mints this token for this run and signs it. The API verifies it
+        # against GitHub's public keys, which is how it knows which repository
+        # is calling without any secret being configured here.
+        oidc=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=paracheck" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+        echo "::add-mask::$oidc"
+        echo "oidc=$oidc" >> "$GITHUB_OUTPUT"
+
+        pr="${{ github.event.pull_request.number }}"
+        sha="${{ github.event.pull_request.head.sha || github.sha }}"
+
+        response=$(curl -sS -w '\n%{http_code}' -X POST "$API_URL/api/runs/claim" \
+          -H "Authorization: Bearer $oidc" \
+          -H "content-type: application/json" \
+          -d "{\"pullRequest\": ${pr:-null}, \"headSha\": \"$sha\"}")
+        status=$(echo "$response" | tail -1)
+        body=$(echo "$response" | sed '$d')
+
+        if [ "$status" != "200" ]; then
+          reason=$(echo "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason") or json.load(sys.stdin).get("error","ParaCheck refused this scan."))' 2>/dev/null || echo "ParaCheck refused this scan.")
+          echo "::warning title=ParaCheck::$reason"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        python3 - "$body" <<'PY' >> "$GITHUB_OUTPUT"
+        import json, sys
+        data = json.loads(sys.argv[1])
+        print(f"scan-id={data['scanId']}")
+        key = data.get("anthropicKey") or ""
+        # Written to the step output masked below; never echoed.
+        print(f"has-key={'true' if key else 'false'}")
+        PY
+
+        key=$(echo "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("anthropicKey") or "")')
+        if [ -n "$key" ]; then echo "::add-mask::$key"; fi
+        echo "ANTHROPIC_API_KEY=$key" >> "$GITHUB_ENV"
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+
+    - name: Install Foundry
+      if: steps.claim.outputs.skip != 'true'
+      uses: foundry-rs/foundry-toolchain@v1
+
+    - uses: actions/setup-python@v5
+      if: steps.claim.outputs.skip != 'true'
+      with:
+        python-version: "3.11"
+
+    # The analyzer itself lives in this action's repository, so the customer's
+    # workflow pins one ref and gets everything.
+    - name: Check out ParaCheck
+      if: steps.claim.outputs.skip != 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: kodykebab/venus
+        ref: main
+        path: .paracheck
+
+    - name: Install the analyzer
+      if: steps.claim.outputs.skip != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m pip install --quiet -r .paracheck/analyzer/static/requirements.txt
+        solc-select install 0.8.24 >/dev/null 2>&1 || true
+        solc-select use 0.8.24 --always-install >/dev/null 2>&1 || true
+
+    - id: analyze
+      if: steps.claim.outputs.skip != 'true'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        CHAIN: ${{ inputs.chain }}
+        MIN_SEVERITY: ${{ inputs.min-severity }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        SCAN_ID: ${{ steps.claim.outputs.scan-id }}
+        API_URL: ${{ inputs.api-url }}
+        OIDC: ${{ steps.claim.outputs.oidc }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: python3 .paracheck/.github/actions/paracheck/run.py
+
+branding:
+  icon: "zap"
+  color: "blue"

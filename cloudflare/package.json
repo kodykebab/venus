@@ -11,8 +11,9 @@
     "db:remote": "wrangler d1 execute paracheck --remote --file=schema.sql"
   },
   "dependencies": {
+    "@clerk/backend": "^3.18.1",
     "@cloudflare/containers": "^0.3.7",
-    "@clerk/backend": "^3.18.1"
+    "jose": "^6.2.12"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260918.1",

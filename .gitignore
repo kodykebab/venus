@@ -33,3 +33,4 @@ paracheck.db
 # Next.js
 web/.next/
 web/out/
+.deploy-secrets.env

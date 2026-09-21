@@ -191,3 +191,55 @@ export async function failCheckRun(
     summary: reason,
   });
 }
+
+/**
+ * Triggers the customer's ParaCheck workflow.
+ *
+ * This is the "Scan now" button. It needs the workflow file to exist in the
+ * repository's default branch, which is why a 404 here is reported as "add the
+ * workflow" rather than as a failure - that is what it almost always means.
+ */
+export async function dispatchWorkflow(
+  env: Env,
+  installationId: number,
+  repository: string,
+  workflow = "paracheck.yml",
+): Promise<{ ok: boolean; reason: string; needsWorkflow?: boolean }> {
+  let token: InstallationToken;
+  try {
+    token = await installationToken(env, installationId);
+  } catch {
+    return { ok: false, reason: "Could not authenticate with GitHub for this installation." };
+  }
+
+  const repoResponse = await fetch(`${API}/repos/${repository}`, {
+    headers: headers(token.token),
+  });
+  if (!repoResponse.ok) {
+    return { ok: false, reason: "ParaCheck cannot read that repository any more." };
+  }
+  const { default_branch } = (await repoResponse.json()) as { default_branch: string };
+
+  const response = await fetch(
+    `${API}/repos/${repository}/actions/workflows/${workflow}/dispatches`,
+    {
+      method: "POST",
+      headers: headers(token.token),
+      body: JSON.stringify({ ref: default_branch }),
+    },
+  );
+
+  if (response.status === 204) return { ok: true, reason: "" };
+  if (response.status === 404) {
+    return {
+      ok: false,
+      needsWorkflow: true,
+      reason:
+        "This repository has no .github/workflows/paracheck.yml on its default branch yet. Add it and scans can run.",
+    };
+  }
+  return {
+    ok: false,
+    reason: `GitHub refused to start the workflow (${response.status}).`,
+  };
+}

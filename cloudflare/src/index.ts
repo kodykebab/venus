@@ -1,20 +1,19 @@
-import { Analyzer, ContainerProxy } from "./analyzer";
 import { emailFor, ownedInstallation, requireAccount, type Session } from "./auth";
 import { decrypt, encrypt, keyHint } from "./crypto";
 import * as db from "./db";
-import type { Env, ScanJob } from "./env";
+import type { Env } from "./env";
 import * as github from "./github";
 import { decide, PLANS, PURCHASABLE, scansPerWeek } from "./plans";
+import * as oidc from "./oidc";
 import * as stripe from "./stripe";
-
-export { Analyzer, ContainerProxy };
 
 /**
  * The ParaCheck control plane.
  *
- * It owns identity, billing, quota and state. It never compiles anything:
- * repository analysis runs in the Analyzer container, which is the only part
- * of the system that sees customer source.
+ * It owns identity, billing, quota and state. It never compiles anything and
+ * never sees customer source: the analysis runs as a GitHub Actions workflow on
+ * the customer's own runner, which authenticates back here with a GitHub OIDC
+ * token rather than a secret anyone has to configure.
  *
  * Everything here is JSON. The Next.js app on Pages is the only frontend.
  */
@@ -64,36 +63,7 @@ export default {
     }
   },
 
-  /**
-   * The queue consumer: one scan per invocation.
-   *
-   * This is where a job becomes a running container. It mints the installation
-   * token here rather than carrying one in the message, so a retry an hour
-   * later still works and no credential sits at rest in a queue.
-   */
-  async queue(batch: MessageBatch<ScanJob>, env: Env): Promise<void> {
-    for (const message of batch.messages) {
-      const job = message.body;
-      try {
-        await runScan(env, job);
-        message.ack();
-      } catch (error) {
-        console.error(`paracheck: scan ${job.scanId} failed`, error);
-        const attempt = message.attempts ?? 1;
-        if (attempt >= 3) {
-          // Out of retries: record why, so the dashboard shows a failed scan
-          // rather than one stuck on "queued" forever.
-          await db.completeScan(env.DB, job.scanId, "failed", {
-            message: error instanceof Error ? error.message : "Analysis failed.",
-          });
-          message.ack();
-        } else {
-          message.retry({ delaySeconds: 30 * attempt });
-        }
-      }
-    }
-  },
-} satisfies ExportedHandler<Env, ScanJob>;
+} satisfies ExportedHandler<Env>;
 
 async function route(
   url: URL,
@@ -114,6 +84,10 @@ async function route(
   if (path === "/api/webhooks/stripe" && request.method === "POST") {
     return stripeWebhook(request, env);
   }
+
+  // --- the runner (authenticated by GitHub OIDC, not a session) -----------
+  if (path === "/api/runs/claim" && request.method === "POST") return claimRun(request, env);
+  if (path === "/api/runs/result" && request.method === "POST") return reportRun(request, env);
 
   // --- install redirect ---------------------------------------------------
   if (path === "/api/install") return startInstall(url, request, env);
@@ -155,8 +129,7 @@ function health(env: Env): Response {
     stripe_webhook: Boolean(env.STRIPE_WEBHOOK_SECRET),
     encryption: Boolean(env.ENCRYPTION_KEY),
     database: Boolean(env.DB),
-    queue: Boolean(env.SCANS),
-    analyzer: Boolean(env.ANALYZER),
+    workflow_dispatch: Boolean(env.GITHUB_APP_ID),
   };
   const missing = Object.entries(required)
     .filter(([, ok]) => !ok)
@@ -303,67 +276,15 @@ async function startScan(request: Request, env: Env, session: Session): Promise<
     trigger: "manual",
     state: "queued",
   });
-  await env.SCANS.send({
-    scanId,
-    accountId: session.accountId,
-    installationId,
-    repository,
-    pullRequest: null,
-    headSha: null,
-    trigger: "manual",
-  });
-
-  return json({ scanId, state: "queued" }, 202);
-}
-
-/**
- * Runs one scan: mint a token, hand the job to the container, record what came
- * back. The container posts the Check Run itself, because it is the only thing
- * that has the findings.
- */
-async function runScan(env: Env, job: ScanJob): Promise<void> {
-  await db.completeScan(env.DB, job.scanId, "running");
-
-  const account = await db.getAccount(env.DB, job.accountId);
-  const token = await github.installationToken(env, job.installationId);
-
-  // BYOK: decrypted here and passed to the container for this job only. Absent
-  // is a normal state - findings are deterministic either way.
-  const anthropicKey = env.ENCRYPTION_KEY
-    ? await decrypt(env.ENCRYPTION_KEY, account?.anthropic_key ?? null)
-    : null;
-
-  const container = env.ANALYZER.getByName(`scan-${job.scanId}`);
-  const response = await container.fetch(
-    new Request("https://analyzer.internal/scan", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        scanId: job.scanId,
-        repository: job.repository,
-        pullRequest: job.pullRequest,
-        headSha: job.headSha,
-        githubToken: token.token,
-        anthropicKey,
-      }),
-    }),
-  );
-
-  if (!response.ok) {
-    throw new Error(`analyzer returned ${response.status}`);
+  const dispatched = await github.dispatchWorkflow(env, installationId, repository);
+  if (!dispatched.ok) {
+    // The most common cause by far is the workflow file not being in the
+    // repository yet, so the message says that rather than "dispatch failed".
+    await db.completeScan(env.DB, scanId, "failed", { message: dispatched.reason });
+    return json({ error: dispatched.reason, needsWorkflow: dispatched.needsWorkflow }, 409);
   }
 
-  const result = (await response.json()) as {
-    state: string;
-    findings?: number;
-    verdict?: string | null;
-    message?: string;
-  };
-  await db.completeScan(env.DB, job.scanId, result.state, {
-    findings: result.findings ?? 0,
-    verdict: result.verdict ?? null,
-    message: result.message ?? "",
-  });
+  return json({ scanId, state: "queued" }, 202);
 }
 
 // --- GitHub webhook ---------------------------------------------------------
@@ -491,26 +412,9 @@ async function queuePullRequestScan(
     return;
   }
 
-  const scanId = crypto.randomUUID();
-  await db.createScan(env.DB, {
-    id: scanId,
-    account_id: installation.account_id,
-    installation_id: installationId,
-    repository,
-    pull_request: pullRequest,
-    head_sha: headSha,
-    trigger: "pull_request",
-    state: "queued",
-  });
-  await env.SCANS.send({
-    scanId,
-    accountId: installation.account_id,
-    installationId,
-    repository,
-    pullRequest,
-    headSha,
-    trigger: "pull_request",
-  });
+  // Nothing is queued here. The customer's workflow fires on its own
+  // `pull_request` trigger and claims a scan when it starts, which is also the
+  // only way a run that we did not dispatch still gets counted.
 }
 
 // --- Stripe webhook ---------------------------------------------------------
@@ -626,4 +530,110 @@ async function anthropicKey(
     keyHint(trimmed),
   );
   return json({ ok: true, hint: keyHint(trimmed) });
+}
+
+// --- the runner ---------------------------------------------------------------
+//
+// These two endpoints are the whole contract with a GitHub Actions run. Both
+// authenticate with a GitHub OIDC token, so the customer configures no secret
+// and we still know exactly which repository is calling.
+
+/**
+ * A run asks permission before it analyses anything.
+ *
+ * Checking here rather than only at dispatch is what makes the quota real: a
+ * workflow also fires on the repository's own `pull_request` trigger, which we
+ * never sent, so this is the only point every scan passes through.
+ */
+async function claimRun(request: Request, env: Env): Promise<Response> {
+  const identity = await oidc.identityFrom(request);
+  if (!identity) return json({ error: "invalid or missing OIDC token" }, 401);
+
+  const owner = await oidc.accountForRepository(env, identity.repository);
+  if (!owner) {
+    return json(
+      {
+        allowed: false,
+        reason:
+          "This repository is not connected to a ParaCheck account. Install the app and sign in at least once.",
+      },
+      403,
+    );
+  }
+
+  const body = (await request.json().catch(() => ({}))) as {
+    pullRequest?: number | null;
+    headSha?: string | null;
+  };
+
+  const account = await db.getAccount(env.DB, owner.accountId);
+  const verdict = decide(await db.quotaFor(env.DB, account));
+  if (!verdict.allowed) {
+    // Recorded as blocked so the dashboard can explain why a pull request has
+    // no check on it, but blocked scans do not count against the window.
+    await db.createScan(env.DB, {
+      id: crypto.randomUUID(),
+      account_id: owner.accountId,
+      installation_id: owner.installationId,
+      repository: identity.repository,
+      pull_request: body.pullRequest ?? null,
+      head_sha: body.headSha ?? null,
+      trigger: "pull_request",
+      state: "blocked",
+    });
+    return json({ allowed: false, reason: verdict.reason, quota: verdict.quota }, 402);
+  }
+
+  const scanId = crypto.randomUUID();
+  await db.createScan(env.DB, {
+    id: scanId,
+    account_id: owner.accountId,
+    installation_id: owner.installationId,
+    repository: identity.repository,
+    pull_request: body.pullRequest ?? null,
+    head_sha: body.headSha ?? null,
+    trigger: body.pullRequest ? "pull_request" : "manual",
+    state: "running",
+  });
+
+  // The account's own Claude key, for this run only. Absent is normal: findings
+  // are deterministic either way.
+  const anthropicKey = env.ENCRYPTION_KEY
+    ? await decrypt(env.ENCRYPTION_KEY, account?.anthropic_key ?? null)
+    : null;
+
+  return json({ allowed: true, scanId, quota: verdict.quota, anthropicKey });
+}
+
+/** A run reports what it found. */
+async function reportRun(request: Request, env: Env): Promise<Response> {
+  const identity = await oidc.identityFrom(request);
+  if (!identity) return json({ error: "invalid or missing OIDC token" }, 401);
+
+  const body = (await request.json().catch(() => ({}))) as {
+    scanId?: string;
+    state?: string;
+    findings?: number;
+    verdict?: string | null;
+    message?: string;
+  };
+  if (!body.scanId) return json({ error: "scanId is required" }, 400);
+
+  // A run may only report on a scan for its own repository. Without this, any
+  // repository with the app installed could overwrite another's history.
+  const scan = await env.DB.prepare("SELECT repository FROM scans WHERE id = ?")
+    .bind(body.scanId)
+    .first<{ repository: string }>();
+  if (!scan || scan.repository !== identity.repository) {
+    return json({ error: "unknown scan" }, 404);
+  }
+
+  const allowed = ["done", "failed", "empty"];
+  const state = allowed.includes(body.state ?? "") ? (body.state as string) : "failed";
+  await db.completeScan(env.DB, body.scanId, state, {
+    findings: body.findings ?? 0,
+    verdict: body.verdict ?? null,
+    message: body.message ?? "",
+  });
+  return json({ ok: true });
 }

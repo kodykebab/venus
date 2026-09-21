@@ -1,5 +1,3 @@
-import type { Analyzer } from "./analyzer";
-
 /**
  * Everything the Worker is given.
  *
@@ -10,8 +8,6 @@ import type { Analyzer } from "./analyzer";
 export interface Env {
   // Bindings
   DB: D1Database;
-  SCANS: Queue<ScanJob>;
-  ANALYZER: DurableObjectNamespace<Analyzer>;
 
   // Vars (public)
   ENVIRONMENT: string;
@@ -35,20 +31,3 @@ export interface Env {
   ENCRYPTION_KEY: string;
 }
 
-/**
- * A unit of work for the analyzer container.
- *
- * Carries ids, not credentials: the installation token is minted by the
- * consumer when the job actually runs. A token sitting in a queue message
- * would be a credential at rest with an hour of life and no way to revoke it,
- * and it would likely have expired by the time a retry picked it up anyway.
- */
-export interface ScanJob {
-  scanId: string;
-  accountId: string;
-  installationId: number;
-  repository: string;
-  pullRequest: number | null;
-  headSha: string | null;
-  trigger: "pull_request" | "manual";
-}
