@@ -102,6 +102,15 @@ export interface FindingDetail {
   file: string | null;
   lines: number[];
   suggested_fix: string | null;
+  // Evidence tier: "A"/"B" proven (may block a merge), "C"/"D" leads that
+  // never do. Optional because scans from before this shipped won't carry it.
+  evidence?: string;
+  evidence_detail?: {
+    command?: string;
+    vulnerable?: string;
+    patched?: string;
+    poc_test?: string;
+  } | null;
 }
 
 export interface ScanDetail {

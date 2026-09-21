@@ -229,14 +229,28 @@ def build_annotations(findings: list[dict]) -> list[dict]:
 
 
 def conclusion_for(findings: list[dict], fail_on: str | None) -> str:
+    """Only proven findings can fail a check.
+
+    This is the whole promise of the product in one place: an unproven pattern
+    match, however severe it looks, is a lead - it is shown, but it never
+    blocks a merge. A developer's build breaks only for something that
+    reproduced (a failing exploit test, tier A, or a symbolic counterexample,
+    tier B). That is what makes a red check here worth trusting instead of
+    ignoring, which is the failure mode of every noisy scanner before it.
+    """
+    proven = [f for f in findings if f.get("evidence", "D") in ("A", "B")]
+
     if not fail_on:
+        # No threshold configured: surface that there is something (neutral)
+        # without ever blocking, and pass cleanly when there is nothing.
         return "success" if not findings else "neutral"
+
     order = ["critical", "high", "medium", "low", "info", "optimization"]
     try:
         threshold = order.index(fail_on)
     except ValueError:
         return "neutral"
-    blocking = [f for f in findings
+    blocking = [f for f in proven
                 if f.get("severity") in order and order.index(f["severity"]) <= threshold]
     return "failure" if blocking else "success"
 

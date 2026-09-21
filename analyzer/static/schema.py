@@ -12,6 +12,40 @@ from dataclasses import asdict, dataclass, field
 # Ordered most severe first - index into this for sorting/filtering.
 SEVERITIES = ["critical", "high", "medium", "low", "info", "optimization"]
 
+# Evidence tiers, strongest first. This is the spine of the product: a finding
+# is trusted according to what can be shown for it, not according to how
+# confident a detector or model feels.
+#
+#   A  a Foundry test that fails on this code and passes against the fix
+#   B  a symbolic counterexample with concrete inputs
+#   C  a proven-reachable path from a public entrypoint, guards enumerated
+#   D  a pattern or heuristic match, unproven
+#
+# Only A and B are "proven": they alone may surface at the top of a report and
+# block a merge. C and D are real information for a human sweeping the code, but
+# they are never allowed to interrupt anyone, and D is always labelled unproven.
+EVIDENCE_TIERS = ["A", "B", "C", "D"]
+EVIDENCE_LABEL = {
+    "A": "Proven (exploit test)",
+    "B": "Proven (symbolic counterexample)",
+    "C": "Reachable",
+    "D": "Unproven",
+}
+_PROVEN_TIERS = {"A", "B"}
+
+
+def evidence_rank(tier: str) -> int:
+    """Lower is stronger evidence. Unknown tiers sort last."""
+    try:
+        return EVIDENCE_TIERS.index(tier)
+    except ValueError:
+        return len(EVIDENCE_TIERS)
+
+
+def is_proven(tier: str) -> bool:
+    """A proven finding (A or B) may surface top-level and block a merge."""
+    return tier in _PROVEN_TIERS
+
 # Slither reports impact as a human string; map it onto our scale.
 _SLITHER_IMPACT_TO_SEVERITY = {
     "High": "high",
@@ -51,9 +85,21 @@ class Finding:
     file: str | None = None
     lines: list[int] = field(default_factory=list)
     suggested_fix: str | None = None
+    # Evidence tier (see EVIDENCE_TIERS). Detectors that only pattern-match
+    # default to "D": honest about the fact that nothing has been executed.
+    # The proof engine is what promotes a finding to A/B, by attaching a PoC.
+    evidence: str = "D"
+    # For a proven finding, how to reproduce it: e.g.
+    # {"poc_test": "test/PocH04.t.sol", "command": "forge test --match-path ...",
+    #  "vulnerable": "PASS", "patched": "FAIL"}. Null for unproven findings.
+    evidence_detail: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @property
+    def proven(self) -> bool:
+        return is_proven(self.evidence)
 
     @property
     def primary_line(self) -> int | None:
@@ -61,11 +107,17 @@ class Finding:
 
 
 def sort_findings(findings: list[Finding]) -> list[Finding]:
-    """Most severe first, then highest confidence, then stable by check name."""
+    """Proven first, then most severe, then highest confidence, then stable.
+
+    Evidence outranks severity deliberately: a proven medium is something a
+    developer can act on right now, and an unproven high is a lead. Putting the
+    provable thing first is the whole point of the product.
+    """
     confidence_rank = {"high": 0, "medium": 1, "low": 2}
     return sorted(
         findings,
         key=lambda f: (
+            evidence_rank(f.evidence),
             severity_rank(f.severity),
             confidence_rank.get(f.confidence, 3),
             f.check,

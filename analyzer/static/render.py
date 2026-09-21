@@ -34,6 +34,36 @@ SEVERITY_LABEL = {
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info", "optimization"]
 
+# Evidence tiers (kept local so this deterministic renderer has no import
+# coupling). Only A and B are proven: they lead the report and may block a
+# merge. C and D are collapsed and never block; D is labelled unproven.
+_PROVEN_TIERS = {"A", "B"}
+_EVIDENCE_LABEL = {
+    "A": "proven with an exploit test",
+    "B": "proven with a symbolic counterexample",
+    "C": "reachable",
+    "D": "unproven",
+}
+
+
+def _is_proven(finding: dict) -> bool:
+    return finding.get("evidence", "D") in _PROVEN_TIERS
+
+
+def _render_proof(finding: dict) -> list[str]:
+    """The reproduce block for a proven finding: the reader can run it."""
+    detail = finding.get("evidence_detail") or {}
+    command = detail.get("command")
+    if not command:
+        return []
+    tier = finding.get("evidence", "D")
+    lines = [f"**Reproduce** ({_EVIDENCE_LABEL.get(tier, 'proven')}):", "", "```bash", command, "```"]
+    vuln, patched = detail.get("vulnerable"), detail.get("patched")
+    if vuln and patched:
+        lines.append(f"_Fails on this branch ({vuln}), passes against the fix ({patched})._")
+    lines.append("")
+    return lines
+
 # Below this severity, a finding gets its title and location but is folded
 # into a collapsed group rather than shown open - past a certain point, equal
 # weight for every finding stops being readable and starts being noise.
@@ -83,6 +113,7 @@ def _render_finding(finding: dict, heading: str = "####") -> list[str]:
         else:
             lines.append(description)
         lines.append("")
+    lines.extend(_render_proof(finding))
     if finding.get("suggested_fix"):
         lines.append(f"**Fix:** {finding['suggested_fix']}")
         lines.append("")
@@ -131,31 +162,58 @@ def render_markdown(report: dict, target: str = "", title: str = "ParaCheck revi
     if not findings:
         return "\n".join(lines).rstrip() + "\n"
 
+    # The primary split is evidence, not severity. Proven findings (a failing
+    # exploit test, a symbolic counterexample) lead the report and are the only
+    # ones allowed to block a merge. Everything else is a lead: real signal for
+    # a human sweeping the code, but it never interrupts and it says so.
+    proven = [f for f in findings if _is_proven(f)]
+    unproven = [f for f in findings if not _is_proven(f)]
+
+    if proven:
+        noun = "finding" if len(proven) == 1 else "findings"
+        lines.append(f"### ✅ {len(proven)} proven {noun}")
+        lines.append("")
+        lines.append("_Each of these reproduces: the test below fails on this code and passes once fixed._")
+        lines.append("")
+        for finding in proven:
+            lines.extend(_render_finding(finding, heading="####"))
+
+    if unproven:
+        lines.extend(_render_unproven(unproven, collapsed=bool(proven)))
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_unproven(findings: list[dict], collapsed: bool) -> list[str]:
+    """The leads: grouped by severity, and folded away behind a summary once
+    there is proven work above them competing for the reader's attention."""
+    lines: list[str] = []
     by_severity: dict[str, list[dict]] = {}
     for finding in findings:
         by_severity.setdefault(finding["severity"], []).append(finding)
+
+    header = f"Unproven leads ({len(findings)})"
+    if collapsed:
+        lines.append("<details>")
+        lines.append(f"<summary>{header} — pattern matches, not reproduced</summary>")
+        lines.append("")
+    else:
+        lines.append(f"### {header}")
+        lines.append("")
+        lines.append("_Pattern matches, not reproduced. Nothing here blocks a merge._")
+        lines.append("")
 
     for severity in SEVERITY_ORDER:
         group = by_severity.get(severity)
         if not group:
             continue
-
         label = f"{SEVERITY_BADGE.get(severity, '•')} {SEVERITY_LABEL.get(severity, severity)} ({len(group)})"
+        lines.append(f"#### {label}")
+        lines.append("")
+        for finding in group:
+            lines.extend(_render_finding(finding, heading="#####"))
 
-        if severity in OPEN_BY_DEFAULT:
-            lines.append(f"#### {label}")
-            lines.append("")
-            for finding in group:
-                lines.extend(_render_finding(finding, heading="#####"))
-        else:
-            # Collapsed, not omitted: still there for anyone who wants it,
-            # without competing for attention with what actually needs fixing.
-            lines.append("<details>")
-            lines.append(f"<summary>{label}</summary>")
-            lines.append("")
-            for finding in group:
-                lines.extend(_render_finding(finding, heading="#####"))
-            lines.append("</details>")
-            lines.append("")
-
-    return "\n".join(lines).rstrip() + "\n"
+    if collapsed:
+        lines.append("</details>")
+        lines.append("")
+    return lines

@@ -12,7 +12,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from render import render_markdown
 from review import review_file
-from schema import Finding, at_least, filter_findings, severity_from_slither_impact, sort_findings
+from schema import (
+    Finding,
+    at_least,
+    evidence_rank,
+    filter_findings,
+    is_proven,
+    severity_from_slither_impact,
+    sort_findings,
+)
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 VULNERABLE = os.path.join(FIXTURES, "VulnerableSample.sol")
@@ -31,6 +39,29 @@ def test_severity_ordering_and_filtering():
     assert [f.check for f in sort_findings(findings)] == ["hot", "low-one", "noise"]
     assert [f.check for f in filter_findings(findings, "low")] == ["low-one", "hot"]
     assert at_least("high", "medium") and not at_least("low", "high")
+
+
+def test_evidence_outranks_severity_in_ordering():
+    # A proven medium must sort above an unproven high: the whole product
+    # rests on showing the developer what can actually be reproduced first.
+    findings = [
+        Finding("slither", "unproven-high", "high", "high", "t", "d", evidence="D"),
+        Finding("paracheck", "proven-medium", "medium", "high", "t", "d", evidence="A"),
+    ]
+    assert [f.check for f in sort_findings(findings)] == ["proven-medium", "unproven-high"]
+
+
+def test_only_a_and_b_are_proven():
+    assert is_proven("A") and is_proven("B")
+    assert not is_proven("C") and not is_proven("D")
+    # Unknown tiers are treated as the weakest possible evidence.
+    assert evidence_rank("A") < evidence_rank("D") < evidence_rank("wat")
+
+
+def test_findings_default_to_unproven():
+    # A detector that only pattern-matches must not claim more than it can show.
+    f = Finding("slither", "reentrancy-eth", "high", "medium", "t", "d")
+    assert f.evidence == "D" and not f.proven and f.evidence_detail is None
 
 
 def test_slither_impact_maps_onto_our_scale():
@@ -97,26 +128,57 @@ def test_render_markdown_shows_the_full_finding_not_just_a_count():
         assert finding["suggested_fix"] in rendered
 
 
-def test_render_markdown_groups_by_severity_and_collapses_the_minor_ones():
+def test_render_markdown_leads_with_proven_and_folds_unproven():
     from schema import Finding
 
     report = {
         "chain": {"name": "Monad", "parallelismAnalysisRan": True},
         "contracts": [],
-        "summary": {"totalFindings": 2, "bySeverity": {"critical": 1, "info": 1}},
+        "summary": {"totalFindings": 2, "bySeverity": {"medium": 1, "critical": 1}},
         "findings": [
-            Finding(source="paracheck", check="x", severity="critical", confidence="high",
-                   title="Critical thing", description="why it matters").to_dict(),
-            Finding(source="paracheck", check="y", severity="info", confidence="low",
-                   title="Minor thing", description="minor context").to_dict(),
+            # A proven medium: has an exploit test that reproduces.
+            Finding(source="paracheck", check="proven", severity="medium", confidence="high",
+                    title="Proven thing", description="reproducible", evidence="A",
+                    evidence_detail={"command": "forge test --match-path test/Poc.t.sol",
+                                     "vulnerable": "PASS", "patched": "FAIL"}).to_dict(),
+            # An unproven critical: only a pattern match, no execution.
+            Finding(source="slither", check="hunch", severity="critical", confidence="low",
+                    title="Unproven thing", description="just a pattern", evidence="D").to_dict(),
         ],
     }
     rendered = render_markdown(report, "x.sol")
-    # Critical is shown open; info is inside a <details> the reader can expand.
-    critical_pos = rendered.index("Critical thing")
+
+    # Proven leads, even though the unproven one is more severe.
+    proven_pos = rendered.index("Proven thing")
     details_pos = rendered.index("<details>")
-    info_pos = rendered.index("Minor thing")
-    assert critical_pos < details_pos < info_pos
+    unproven_pos = rendered.index("Unproven thing")
+    assert proven_pos < details_pos < unproven_pos
+
+    # The proven finding ships a runnable reproduce command; the unproven
+    # section says out loud that it is not proven and does not block.
+    assert "forge test --match-path test/Poc.t.sol" in rendered
+    assert "proven" in rendered.lower()
+    assert "pattern matches, not reproduced" in rendered.lower()
+
+
+def test_render_markdown_unproven_only_is_not_hidden():
+    # With nothing proven, the leads must not be buried behind a fold the
+    # reader has to know to expand - there is nothing more important above them.
+    from schema import Finding
+
+    report = {
+        "chain": {"name": "Monad", "parallelismAnalysisRan": True},
+        "contracts": [],
+        "summary": {"totalFindings": 1, "bySeverity": {"high": 1}},
+        "findings": [
+            Finding(source="slither", check="hunch", severity="high", confidence="low",
+                    title="A lead", description="pattern", evidence="D").to_dict(),
+        ],
+    }
+    rendered = render_markdown(report, "x.sol")
+    assert "A lead" in rendered
+    assert "<details>" not in rendered
+    assert "blocks a merge" in rendered.lower()
 
 
 def test_render_markdown_fences_slithers_multiline_descriptions():

@@ -59,6 +59,12 @@ export interface FindingDetail {
   file: string | null;
   lines: number[];
   suggested_fix: string | null;
+  // Evidence tier: "A"/"B" are proven (a failing exploit test / a symbolic
+  // counterexample) and may block a merge; "C"/"D" are leads that never do.
+  // Older scans predate this column, so it is optional on the wire.
+  evidence?: string;
+  // For a proven finding, how to reproduce it: { command, vulnerable, patched }.
+  evidence_detail?: Record<string, unknown> | null;
 }
 
 // --- accounts ---------------------------------------------------------------
