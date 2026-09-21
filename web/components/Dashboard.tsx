@@ -24,6 +24,7 @@ const SCAN_STATE: Record<string, { label: string; tone: Tone }> = {
   empty: { label: "No Solidity", tone: "" },
   failed: { label: "Failed", tone: "critical" },
   blocked: { label: "Not run", tone: "warn" },
+  no_workflow: { label: "Needs setup", tone: "warn" },
 };
 
 export function Dashboard() {
@@ -31,6 +32,7 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [scanning, setScanning] = useState<string | null>(null);
+  const [settingUp, setSettingUp] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -63,17 +65,44 @@ export function Dashboard() {
       setNotice(
         "Scanning. The result appears here and as a check on the commit, usually within a couple of minutes.",
       );
-      await load();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not start that scan.");
     } finally {
       setScanning(null);
+      // Reload even on failure: a repository with no workflow file is
+      // recorded as a scan row, and the row is what turns the button into
+      // "Add workflow" - without this reload that only happens on a manual
+      // page refresh.
+      await load();
     }
   }
 
   async function connectGithub() {
     const { url } = await api<{ url: string }>("/api/install?format=json");
     window.location.href = url;
+  }
+
+  async function addWorkflow(installationId: number, repository: string) {
+    setSettingUp(repository);
+    setNotice(null);
+    setError(null);
+    try {
+      const { prUrl } = await api<{ prUrl: string }>("/api/repos/add-workflow", {
+        method: "POST",
+        body: { installationId, repository },
+      });
+      // Opened in a new tab rather than navigated to: the dashboard is where
+      // the next action (Scan now, once it's merged) still needs to happen.
+      window.open(prUrl, "_blank", "noopener,noreferrer");
+      setNotice(
+        "Opened a pull request adding the workflow file. Nothing runs until you merge it " +
+          "- once you do, Scan now and pull-request scans both start working for this repository.",
+      );
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not set up that repository.");
+    } finally {
+      setSettingUp(null);
+    }
   }
 
   if (error && !me) {
@@ -128,7 +157,9 @@ export function Dashboard() {
         me={me}
         canScan={canScan}
         scanning={scanning}
+        settingUp={settingUp}
         onScan={scan}
+        onAddWorkflow={addWorkflow}
         onConnect={connectGithub}
       />
       <History scans={me.scans} />
@@ -245,13 +276,17 @@ function Repositories({
   me,
   canScan,
   scanning,
+  settingUp,
   onScan,
+  onAddWorkflow,
   onConnect,
 }: {
   me: Me;
   canScan: boolean;
   scanning: string | null;
+  settingUp: string | null;
   onScan: (installationId: number, repository: string) => void;
+  onAddWorkflow: (installationId: number, repository: string) => void;
   onConnect: () => void;
 }) {
   const rows = me.installations.flatMap((installation) =>
@@ -287,8 +322,10 @@ function Repositories({
             {rows.map(({ installation, repository }) => {
               const scan = latest.get(repository);
               const state = scan ? SCAN_STATE[scan.state] : undefined;
+              const needsWorkflow = scan?.state === "no_workflow";
               const busy =
-                scanning === repository || scan?.state === "queued" || scan?.state === "running";
+                scanning === repository || settingUp === repository ||
+                scan?.state === "queued" || scan?.state === "running";
 
               return (
                 <tr key={repository}>
@@ -299,7 +336,11 @@ function Repositories({
                     {state ? (
                       <>
                         <Badge tone={state.tone}>{state.label}</Badge>{" "}
-                        <span className="small dim">{scan?.message ?? ""}</span>
+                        <span className="small dim">
+                          {needsWorkflow
+                            ? "No paracheck.yml on the default branch yet."
+                            : scan?.message ?? ""}
+                        </span>
                       </>
                     ) : (
                       <span className="small dim">not scanned yet</span>
@@ -307,7 +348,17 @@ function Repositories({
                   </td>
                   <td style={{ textAlign: "right" }}>
                     {busy ? (
-                      <span className="small dim">in progress</span>
+                      <span className="small dim">
+                        {settingUp === repository ? "opening a pull request\u2026" : "in progress"}
+                      </span>
+                    ) : needsWorkflow ? (
+                      <button
+                        className="btn secondary small"
+                        type="button"
+                        onClick={() => onAddWorkflow(installation.id, repository)}
+                      >
+                        Add workflow
+                      </button>
                     ) : canScan ? (
                       <button
                         className="btn secondary small"

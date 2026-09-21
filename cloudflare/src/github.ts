@@ -283,3 +283,186 @@ export async function dispatchWorkflow(
     reason: `GitHub refused to start the workflow (${response.status}).`,
   };
 }
+
+// --- adding the workflow file for the customer --------------------------------
+
+/** The workflow file we open a PR to add when a repository doesn't have one yet. */
+const WORKFLOW_TEMPLATE = `# ParaCheck — parallelism and gas analysis for Solidity.
+#
+# The analysis runs here, on your own runner, so ParaCheck never receives a copy
+# of your source. It authenticates to the ParaCheck API with a GitHub OIDC
+# token, which GitHub mints for this run and signs — there is no secret to
+# create, store or rotate.
+
+name: ParaCheck
+
+on:
+  pull_request:
+    paths:
+      - "**.sol"
+      - "foundry.toml"
+      - "hardhat.config.*"
+  # Lets the Scan now button in the ParaCheck dashboard start a run.
+  workflow_dispatch: {}
+
+# Least privilege: read the code, write the check, prove who we are.
+# \`id-token\` is what makes the secretless authentication work.
+permissions:
+  contents: read
+  checks: write
+  id-token: write
+
+concurrency:
+  # A newer push supersedes a scan nobody is waiting on any more.
+  group: paracheck-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Analyze with ParaCheck
+        uses: kodykebab/venus/.github/actions/paracheck@main
+        with:
+          target: "."
+          chain: monad
+          # Set to \`high\` to fail the check — and block the merge — when a
+          # high-severity finding appears. Empty means report only.
+          fail-on: ""
+`;
+
+const WORKFLOW_PATH = ".github/workflows/paracheck.yml";
+const BRANCH_NAME = "paracheck/add-workflow";
+
+function utf8ToBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/**
+ * Opens a pull request that adds the ParaCheck workflow file.
+ *
+ * Deliberately a pull request, not a direct commit to the default branch: the
+ * customer reviews and merges it themselves, which is both the safer thing to
+ * do with write access to someone else's repository and the standard pattern
+ * (Dependabot and Renovate both onboard this way). Nothing runs until they
+ * merge it - opening the PR does not by itself grant scanning.
+ *
+ * Requires the App to hold Contents:write and Pull requests:write. Without
+ * them this fails cleanly and the caller falls back to the manual-copy
+ * instructions.
+ */
+export async function proposeWorkflowFile(
+  env: Env,
+  installationId: number,
+  repository: string,
+): Promise<{ ok: boolean; reason: string; prUrl?: string }> {
+  let token: InstallationToken;
+  try {
+    token = await installationToken(env, installationId);
+  } catch {
+    return { ok: false, reason: "Could not authenticate with GitHub for this installation." };
+  }
+  const auth = headers(token.token);
+
+  const repoResponse = await fetch(`${API}/repos/${repository}`, { headers: auth });
+  if (!repoResponse.ok) {
+    return { ok: false, reason: "ParaCheck cannot read that repository any more." };
+  }
+  const repoInfo = (await repoResponse.json()) as { default_branch: string; permissions?: Record<string, boolean> };
+  const base = repoInfo.default_branch;
+
+  // An existing open PR from a previous attempt is reused rather than
+  // recreated, so clicking the button twice doesn't open two PRs.
+  const existingPr = await findOpenPr(repository, auth, base);
+  if (existingPr) return { ok: true, reason: "", prUrl: existingPr };
+
+  const baseRefResponse = await fetch(`${API}/repos/${repository}/git/ref/heads/${base}`, {
+    headers: auth,
+  });
+  if (!baseRefResponse.ok) {
+    return { ok: false, reason: "Could not read the default branch." };
+  }
+  const baseSha = ((await baseRefResponse.json()) as { object: { sha: string } }).object.sha;
+
+  const branchResponse = await fetch(`${API}/repos/${repository}/git/refs`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({ ref: `refs/heads/${BRANCH_NAME}`, sha: baseSha }),
+  });
+  if (!branchResponse.ok && branchResponse.status !== 422) {
+    // 422 means the ref already exists - from a previous attempt whose PR was
+    // since closed. Anything else is a real failure.
+    if (branchResponse.status === 403 || branchResponse.status === 404) {
+      return {
+        ok: false,
+        reason:
+          "ParaCheck doesn't have permission to write to this repository yet. " +
+          "The GitHub App needs Contents and Pull requests permissions - reinstall " +
+          "after they're granted, or add the workflow file yourself.",
+      };
+    }
+    return { ok: false, reason: `Could not create a branch (${branchResponse.status}).` };
+  }
+
+  const fileResponse = await fetch(`${API}/repos/${repository}/contents/${WORKFLOW_PATH}`, {
+    method: "PUT",
+    headers: auth,
+    body: JSON.stringify({
+      message: "Add ParaCheck workflow",
+      content: utf8ToBase64(WORKFLOW_TEMPLATE),
+      branch: BRANCH_NAME,
+    }),
+  });
+  if (!fileResponse.ok) {
+    // The file already exists on this branch from an earlier partial attempt,
+    // or on the target branch itself - either way there's nothing more to add.
+    if (fileResponse.status !== 422) {
+      return { ok: false, reason: `Could not add the workflow file (${fileResponse.status}).` };
+    }
+  }
+
+  const prResponse = await fetch(`${API}/repos/${repository}/pulls`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      title: "Add ParaCheck",
+      head: BRANCH_NAME,
+      base,
+      body:
+        "Adds `.github/workflows/paracheck.yml`.\n\n" +
+        "Nothing runs on your repository until this is merged - review it first. " +
+        "Once merged, ParaCheck scans pull requests that touch `.sol` files, and the " +
+        "**Scan now** button on the dashboard starts working for this repository.\n\n" +
+        "The workflow runs on your own GitHub Actions runner. ParaCheck never receives " +
+        "a copy of your source.",
+    }),
+  });
+  if (!prResponse.ok) {
+    const again = await findOpenPr(repository, auth, base);
+    if (again) return { ok: true, reason: "", prUrl: again };
+    return { ok: false, reason: `Could not open the pull request (${prResponse.status}).` };
+  }
+  const pr = (await prResponse.json()) as { html_url: string };
+  return { ok: true, reason: "", prUrl: pr.html_url };
+}
+
+async function findOpenPr(
+  repository: string,
+  auth: Record<string, string>,
+  base: string,
+): Promise<string | null> {
+  const response = await fetch(
+    `${API}/repos/${repository}/pulls?state=open&head=${repository.split("/")[0]}:${BRANCH_NAME}&base=${base}`,
+    { headers: auth },
+  );
+  if (!response.ok) return null;
+  const pulls = (await response.json()) as Array<{ html_url: string }>;
+  return pulls[0]?.html_url ?? null;
+}

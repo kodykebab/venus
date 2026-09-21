@@ -99,6 +99,9 @@ async function route(
 
   if (path === "/api/me") return me(env, session);
   if (path === "/api/scans" && request.method === "POST") return startScan(request, env, session);
+  if (path === "/api/repos/add-workflow" && request.method === "POST") {
+    return addWorkflow(request, env, session);
+  }
   if (path === "/api/billing/checkout" && request.method === "POST") {
     return checkout(request, env, session);
   }
@@ -282,13 +285,44 @@ async function startScan(request: Request, env: Env, session: Session): Promise<
   });
   const dispatched = await github.dispatchWorkflow(env, installationId, repository);
   if (!dispatched.ok) {
-    // The most common cause by far is the workflow file not being in the
-    // repository yet, so the message says that rather than "dispatch failed".
-    await db.completeScan(env.DB, scanId, "failed", { message: dispatched.reason });
+    // A distinct state, not just "failed" with a matching message: the
+    // dashboard needs to reliably tell "no workflow file yet" apart from a
+    // real failure to offer the right button, and matching on message text
+    // would break the moment the wording changes.
+    const state = dispatched.needsWorkflow ? "no_workflow" : "failed";
+    await db.completeScan(env.DB, scanId, state, { message: dispatched.reason });
     return json({ error: dispatched.reason, needsWorkflow: dispatched.needsWorkflow }, 409);
   }
 
   return json({ scanId, state: "queued" }, 202);
+}
+
+/**
+ * The "Add ParaCheck to this repo" button: opens a pull request that adds the
+ * workflow file. This is what a repository with no workflow needs before it
+ * can be scanned at all - previously that state was a dead end with a message
+ * telling the customer to go do it themselves.
+ */
+async function addWorkflow(request: Request, env: Env, session: Session): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    installationId?: number;
+    repository?: string;
+  };
+  const installationId = Number(body.installationId);
+  const repository = String(body.repository ?? "");
+  if (!installationId || !repository) {
+    return json({ error: "installationId and repository are required" }, 400);
+  }
+
+  const installation = await ownedInstallation(env, session, installationId);
+  if (!installation) return json({ error: "unknown installation" }, 403);
+  if (!(await db.isRepositoryActive(env.DB, installationId, repository))) {
+    return json({ error: "ParaCheck does not have access to that repository" }, 403);
+  }
+
+  const result = await github.proposeWorkflowFile(env, installationId, repository);
+  if (!result.ok) return json({ error: result.reason }, 502);
+  return json({ prUrl: result.prUrl });
 }
 
 // --- GitHub webhook ---------------------------------------------------------
@@ -569,6 +603,28 @@ async function claimRun(request: Request, env: Env): Promise<Response> {
     pullRequest?: number | null;
     headSha?: string | null;
   };
+  const pullRequest = body.pullRequest ?? null;
+  const headSha = body.headSha ?? null;
+
+  // A re-run of the same commit (GitHub's "Re-run failed jobs", or a flaky
+  // network retry) must not spend quota twice for one attempt. Reusing the
+  // earlier scan id also means its result lands in the same history row
+  // instead of a duplicate.
+  const already = await db.recentScanOf(
+    env.DB, owner.installationId, identity.repository, pullRequest, headSha,
+  );
+  if (already) {
+    const account = await db.getAccount(env.DB, owner.accountId);
+    const anthropicKey = env.ENCRYPTION_KEY
+      ? await decrypt(env.ENCRYPTION_KEY, account?.anthropic_key ?? null)
+      : null;
+    return json({
+      allowed: true,
+      scanId: already.id,
+      quota: await db.quotaFor(env.DB, account),
+      anthropicKey,
+    });
+  }
 
   const account = await db.getAccount(env.DB, owner.accountId);
   const verdict = decide(await db.quotaFor(env.DB, account));
@@ -580,8 +636,8 @@ async function claimRun(request: Request, env: Env): Promise<Response> {
       account_id: owner.accountId,
       installation_id: owner.installationId,
       repository: identity.repository,
-      pull_request: body.pullRequest ?? null,
-      head_sha: body.headSha ?? null,
+      pull_request: pullRequest,
+      head_sha: headSha,
       trigger: "pull_request",
       state: "blocked",
     });
@@ -594,9 +650,9 @@ async function claimRun(request: Request, env: Env): Promise<Response> {
     account_id: owner.accountId,
     installation_id: owner.installationId,
     repository: identity.repository,
-    pull_request: body.pullRequest ?? null,
-    head_sha: body.headSha ?? null,
-    trigger: body.pullRequest ? "pull_request" : "manual",
+    pull_request: pullRequest,
+    head_sha: headSha,
+    trigger: pullRequest ? "pull_request" : "manual",
     state: "running",
   });
 

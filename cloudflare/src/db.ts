@@ -329,6 +329,38 @@ export async function supersedeScan(db: D1Database, id: string, headSha: string)
   await db.prepare("UPDATE scans SET head_sha = ? WHERE id = ?").bind(headSha, id).run();
 }
 
+/**
+ * A recent scan of this exact commit, in any state - not just in-flight ones.
+ *
+ * This is what stops a GitHub Actions re-run (the "Re-run failed jobs" button,
+ * or a flaky network retry) from charging quota a second time for a commit
+ * already attempted. It differs from `openScanFor`: that one only matches
+ * queued/running scans, because its job is deduping a burst of pushes against
+ * an in-flight scan of an *older* commit. This one matches a scan of the
+ * *same* commit regardless of whether it already finished, because the run
+ * calling this already has a result and quota was already spent producing it.
+ */
+export async function recentScanOf(
+  db: D1Database,
+  installationId: number,
+  repository: string,
+  pullRequest: number | null,
+  headSha: string | null,
+): Promise<Scan | null> {
+  if (!headSha) return null;
+  return await db
+    .prepare(
+      `SELECT * FROM scans
+       WHERE installation_id = ? AND repository = ? AND head_sha = ?
+         AND (pull_request IS ? OR pull_request = ?)
+         AND state != 'blocked'
+         AND created_at >= ?
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .bind(installationId, repository, headSha, pullRequest, pullRequest, now() - STALE_SCAN_SECONDS)
+    .first<Scan>();
+}
+
 export async function recentScans(
   db: D1Database,
   accountId: string,

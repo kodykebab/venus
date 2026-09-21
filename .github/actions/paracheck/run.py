@@ -99,7 +99,20 @@ def report(state: str, findings: int = 0, verdict: str | None = None, message: s
             "verdict": verdict,
             "message": message[:400],
         }).encode(),
-        headers={"Authorization": f"Bearer {oidc}", "content-type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {oidc}",
+            "content-type": "application/json",
+            # Without this, Cloudflare's edge (workers.dev domains specifically
+            # apply anti-scraping heuristics) returns a 403 before the request
+            # reaches the Worker at all - every real run hit this silently:
+            # the scan finished, the Check Run posted, but the dashboard never
+            # heard back and the scan sat as "running" until the 30-minute
+            # reaper marked it failed. Caught by inspecting the very first
+            # production run's logs, not by local testing, because local
+            # testing used the same urllib default and was mistaken for a
+            # signature-verification issue rather than an edge block.
+            "User-Agent": "paracheck-action",
+        },
     )
     try:
         urllib.request.urlopen(request, timeout=30).read()
