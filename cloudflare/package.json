@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:local": "wrangler d1 execute paracheck --local --file=schema.sql",
-    "db:remote": "wrangler d1 execute paracheck --remote --file=schema.sql"
+    "db:remote": "wrangler d1 execute paracheck --remote --file=schema.sql && node scripts/verify-schema.mjs",
+    "db:verify": "node scripts/verify-schema.mjs"
   },
   "dependencies": {
     "@clerk/backend": "^3.18.1",
