@@ -17,7 +17,7 @@
  * be genuinely useful rather than a crippled demo.
  */
 
-export type PlanKey = "free" | "pro" | "enterprise";
+export type PlanKey = "free" | "pro" | "team" | "enterprise";
 
 export interface Plan {
   key: PlanKey;
@@ -26,7 +26,7 @@ export interface Plan {
   cadence: string;
   /** Scans per rolling 30 days. null means no fixed cap (enterprise only). */
   scansPerMonth: number | null;
-  priceEnv?: "STRIPE_PRO_PRICE_ID";
+  priceEnv?: "STRIPE_PRO_PRICE_ID" | "STRIPE_TEAM_PRICE_ID";
   blurb: string;
   features: string[];
 }
@@ -39,27 +39,38 @@ export const PLANS: Record<string, Plan> = {
     cadence: "",
     scansPerMonth: 10,
     blurb: "Enough to keep a contract honest and see what this finds.",
+    // Everything ParaCheck does is on every tier. The feature list says so
+    // rather than inventing paid-only capabilities: the analysis runs from a
+    // workflow file the customer owns, so merge gating and repository count
+    // are not things we could withhold even if we wanted to.
     features: [
       "10 scans per month",
       "GitHub PR Check Runs and inline annotations",
       "Static analysis: Slither + hot-slot classifier",
       "Dynamic contention analysis",
+      "Merge gating on severity thresholds",
+      "Bring your own Claude key",
     ],
   },
   pro: {
     key: "pro",
     label: "Pro",
-    price: "$19",
+    price: "$24",
     cadence: "/month",
-    scansPerMonth: 50,
+    scansPerMonth: 100,
     priceEnv: "STRIPE_PRO_PRICE_ID",
+    blurb: "For one developer shipping regularly.",
+    features: ["100 scans per month", "Everything in Free"],
+  },
+  team: {
+    key: "team",
+    label: "Team",
+    price: "$49",
+    cadence: "/month",
+    scansPerMonth: 250,
+    priceEnv: "STRIPE_TEAM_PRICE_ID",
     blurb: "For a team shipping to a parallel-execution chain.",
-    features: [
-      "50 scans per month",
-      "Everything in Free",
-      "Unlimited repositories per installation",
-      "Merge gating on severity thresholds",
-    ],
+    features: ["250 scans per month", "Everything in Pro"],
   },
   enterprise: {
     key: "enterprise",
@@ -68,9 +79,10 @@ export const PLANS: Record<string, Plan> = {
     cadence: "",
     scansPerMonth: null,
     blurb: "For protocols with their own volume, deployment and support needs.",
+    // These are genuinely different, which is why they are listed.
     features: [
       "Custom monthly scan quota",
-      "Everything in Pro",
+      "Everything in Team",
       "Self-hosted or dedicated deployment options",
       "Direct support channel",
     ],
@@ -78,7 +90,7 @@ export const PLANS: Record<string, Plan> = {
 };
 
 /** Plans that can be bought online. Free needs no checkout; Enterprise is sales-led. */
-export const PURCHASABLE = ["pro"] as const;
+export const PURCHASABLE = ["pro", "team"] as const;
 
 /** The default an account lands on, and the one a cancelled subscription returns to. */
 export const DEFAULT_PLAN: PlanKey = "free";
@@ -121,10 +133,12 @@ export function decide(quota: Quota): QuotaDecision {
   }
   if (quota.used >= quota.limit) {
     const when = quota.resetsAt ? ` Quota frees up in ${humanUntil(quota.resetsAt)}.` : "";
-    const upgrade =
-      quota.plan === "pro" || quota.plan === "enterprise"
-        ? ""
-        : ` ${PLANS.pro.label} is ${PLANS.pro.price}${PLANS.pro.cadence} for ${PLANS.pro.scansPerMonth}.`;
+    // Name the next tier up, not always the cheapest one: telling a Pro
+    // customer about Pro is noise.
+    const next = quota.plan === "free" ? PLANS.pro : quota.plan === "pro" ? PLANS.team : null;
+    const upgrade = next
+      ? ` ${next.label} is ${next.price}${next.cadence} for ${next.scansPerMonth}.`
+      : "";
     return {
       allowed: false,
       reason:

@@ -34,6 +34,7 @@ database_id = "96a48c1d-101b-45de-8e53-23a0846afc5e"
 #   STRIPE_SECRET_KEY
 #   STRIPE_WEBHOOK_SECRET
 #   STRIPE_PRO_PRICE_ID
+#   STRIPE_TEAM_PRICE_ID
 #   ENCRYPTION_KEY          encrypts stored Anthropic keys at rest
 
 # The Analyzer Durable Object was registered by an earlier attempt at running

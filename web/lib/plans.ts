@@ -10,7 +10,7 @@
  */
 
 export interface Plan {
-  key: "free" | "pro" | "enterprise";
+  key: "free" | "pro" | "team" | "enterprise";
   label: string;
   price: string;
   cadence: string;
@@ -27,26 +27,36 @@ export const PLANS: Plan[] = [
     cadence: "",
     scansPerMonth: 10,
     blurb: "Enough to keep a contract honest and see what this finds.",
+    // Everything ParaCheck does is on every tier, and the list says so rather
+    // than inventing paid-only capabilities. The analysis runs from a workflow
+    // file the customer owns, so merge gating and repository count are not
+    // things we could withhold even if we wanted to.
     features: [
       "10 scans per month",
       "GitHub PR Check Runs and inline annotations",
       "Static analysis: Slither + hot-slot classifier",
       "Dynamic contention analysis",
+      "Merge gating on severity thresholds",
+      "Bring your own Claude key",
     ],
   },
   {
     key: "pro",
     label: "Pro",
-    price: "$19",
+    price: "$24",
     cadence: "/month",
-    scansPerMonth: 50,
+    scansPerMonth: 100,
+    blurb: "For one developer shipping regularly.",
+    features: ["100 scans per month", "Everything in Free"],
+  },
+  {
+    key: "team",
+    label: "Team",
+    price: "$49",
+    cadence: "/month",
+    scansPerMonth: 250,
     blurb: "For a team shipping to a parallel-execution chain.",
-    features: [
-      "50 scans per month",
-      "Everything in Free",
-      "Unlimited repositories per installation",
-      "Merge gating on severity thresholds",
-    ],
+    features: ["250 scans per month", "Everything in Pro"],
   },
   {
     key: "enterprise",
@@ -57,7 +67,7 @@ export const PLANS: Plan[] = [
     blurb: "For protocols with their own volume, deployment and support needs.",
     features: [
       "Custom monthly scan quota",
-      "Everything in Pro",
+      "Everything in Team",
       "Self-hosted or dedicated deployment options",
       "Direct support channel",
     ],

@@ -15,7 +15,16 @@ const quota = (over: Partial<Quota> = {}): Quota => ({
 describe("plan limits", () => {
   it("publishes the launch quotas", () => {
     expect(scanLimit("free")).toBe(10);
-    expect(scanLimit("pro")).toBe(50);
+    expect(scanLimit("pro")).toBe(100);
+    expect(scanLimit("team")).toBe(250);
+  });
+
+  it("gets cheaper per scan as the tier goes up", () => {
+    // If a bigger plan ever costs more per scan, the ladder is broken and
+    // nobody has a reason to move up it.
+    const perScan = (key: string) =>
+      Number(PLANS[key].price.replace("$", "")) / (PLANS[key].scansPerMonth ?? 1);
+    expect(perScan("team")).toBeLessThan(perScan("pro"));
   });
 
   it("gives enterprise no fixed cap", () => {
@@ -40,14 +49,14 @@ describe("plan limits", () => {
 
   it("advertises a scan count matching the enforced limit", () => {
     // The pricing page renders these strings; the gate reads scanLimit.
-    for (const key of ["free", ...PURCHASABLE]) {
+    for (const key of ["free", ...PURCHASABLE] as string[]) {
       const plan = PLANS[key];
       expect(plan.features[0]).toBe(`${plan.scansPerMonth} scans per month`);
     }
   });
 
-  it("only sells Pro - free needs no checkout, enterprise is sales-led", () => {
-    expect([...PURCHASABLE]).toEqual(["pro"]);
+  it("sells Pro and Team - free needs no checkout, enterprise is sales-led", () => {
+    expect([...PURCHASABLE]).toEqual(["pro", "team"]);
   });
 });
 
@@ -64,12 +73,16 @@ describe("quota decisions", () => {
     expect(verdict.reason).toContain("frees up");
   });
 
-  it("names the upgrade when a free account runs out, but not to a paying one", () => {
-    const exhausted = { used: 10, remaining: 0 };
-    expect(decide(quota(exhausted)).reason).toContain("$19");
+  it("names the next tier up, not always the cheapest", () => {
+    // Telling a Pro customer about Pro is noise.
+    expect(decide(quota({ used: 10, remaining: 0 })).reason).toContain("Pro is $24");
 
-    const pro = decide(quota({ plan: "pro", limit: 50, used: 50, remaining: 0 }));
-    expect(pro.reason).not.toContain("$19");  // they already bought it
+    const pro = decide(quota({ plan: "pro", limit: 100, used: 100, remaining: 0 }));
+    expect(pro.reason).toContain("Team is $49");
+    expect(pro.reason).not.toContain("Pro is");
+
+    const team = decide(quota({ plan: "team", limit: 250, used: 250, remaining: 0 }));
+    expect(team.reason).not.toContain("is $");  // nothing left to sell them
   });
 
   it("lets a new free account scan straight away", () => {

@@ -15,9 +15,16 @@ const API = "https://api.stripe.com/v1";
 const SIGNATURE_TOLERANCE_SECONDS = 300;
 
 export function configured(env: Env): boolean {
-  // Only Pro is bought online: Free needs no checkout and Enterprise is
-  // sales-led, so a Pro price is the whole requirement.
-  return Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_PRO_PRICE_ID);
+  // Every purchasable plan needs its own Stripe Price. Checking all of them
+  // means a half-configured deployment says so on /api/health rather than
+  // failing at the moment someone clicks the tier you forgot.
+  return Boolean(
+    env.STRIPE_SECRET_KEY &&
+      PURCHASABLE.every((key) => {
+        const priceEnv = PLANS[key].priceEnv;
+        return priceEnv ? env[priceEnv] : false;
+      }),
+  );
 }
 
 function priceFor(env: Env, plan: string): string | null {

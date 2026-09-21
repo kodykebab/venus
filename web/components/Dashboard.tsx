@@ -105,7 +105,7 @@ export function Dashboard() {
   const canScan = me.quota.limit === null || (me.quota.remaining ?? 0) > 0;
   // Nudge toward Pro only when the free allowance is nearly gone - an upgrade
   // banner on day one is noise, and the free tier is meant to be usable.
-  const onFree = me.account.plan !== "pro" && me.account.plan !== "enterprise";
+  const onFree = !["pro", "team", "enterprise"].includes(me.account.plan);
   const runningLow = onFree && (me.quota.remaining ?? 0) <= 3;
 
   return (
@@ -212,6 +212,7 @@ function Summary({ me }: { me: Me }) {
 }
 
 function PlanGate({ remaining }: { remaining: number }) {
+  // The next step up from free, not the biggest plan on the page.
   const pro = PLANS.find((plan) => plan.key === "pro");
   return (
     <Section eyebrow={remaining === 0 ? "Out of scans" : "Running low"}>

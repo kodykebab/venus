@@ -681,6 +681,13 @@ code.inline {
 .plans {
   align-items: stretch;
 }
+/* Four tiers: two rows of two on a tablet, one column on a phone. The generic
+   grid-4 drops to two at 900px, which is right here too. */
+@media (max-width: 1100px) and (min-width: 761px) {
+  .grid-4.plans {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 .plan {
   display: flex;
   flex-direction: column;

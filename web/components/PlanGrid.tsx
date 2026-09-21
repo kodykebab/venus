@@ -42,9 +42,9 @@ export function PlanGrid() {
         </div>
       ) : null}
 
-      <div className="grid grid-3 plans">
+      <div className="grid grid-4 plans">
         {PLANS.map((plan) => (
-          <Panel key={plan.key} className={plan.key === "pro" ? "plan is-featured" : "plan"}>
+          <Panel key={plan.key} className={plan.key === "team" ? "plan is-featured" : "plan"}>
             <div className="stat-label">{plan.label}</div>
             <div className="plan-price">
               {plan.price}
@@ -85,7 +85,7 @@ export function PlanGrid() {
                   <SignedOut>
                     <SignInButton mode="modal">
                       <button
-                        className={plan.key === "pro" ? "btn" : "btn secondary"}
+                        className={plan.key === "team" ? "btn" : "btn secondary"}
                         type="button"
                       >
                         Choose {plan.label}
@@ -94,7 +94,7 @@ export function PlanGrid() {
                   </SignedOut>
                   <SignedIn>
                     <button
-                      className={plan.key === "pro" ? "btn" : "btn secondary"}
+                      className={plan.key === "team" ? "btn" : "btn secondary"}
                       type="button"
                       disabled={busy !== null}
                       onClick={() => subscribe(plan.key)}
