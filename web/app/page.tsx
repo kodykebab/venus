@@ -55,8 +55,9 @@ const STAGES = [
 const STACK = [
   ["Static analysis", "Slither + hot-slot classifier"],
   ["Dynamic analysis", "Foundry / anvil execution traces"],
+  ["Proof engine", "Generated Foundry PoCs, validated by execution"],
   ["Control plane", "Cloudflare Workers + D1"],
-  ["Execution", "Cloudflare Containers"],
+  ["Execution", "GitHub Actions, on your own runner"],
   ["Integration", "Native PR Check Runs and annotations"],
 ];
 
@@ -68,10 +69,12 @@ export default function Home() {
         <section className="section first">
           <div className="hero">
             <div>
-              <h1>Ship cheaper contracts.</h1>
+              <h1>Every finding is one you can run.</h1>
               <p className="lede" style={{ marginTop: 20 }}>
-                ParaCheck finds the storage, execution and parallelism patterns making your
-                Solidity expensive &mdash; and shows you exactly what to change.
+                ParaCheck measures the storage and parallelism patterns making your Solidity
+                slow on a parallel EVM, and proves the bugs that could drain it &mdash; each
+                finding backed by a trace or a failing test you can reproduce. Only proven
+                findings block a merge.
               </p>
               <div className="btn-row" style={{ marginTop: 28 }}>
                 <Link className="btn" href="/dashboard">
@@ -154,12 +157,12 @@ export default function Home() {
                 pull request that touches a <code className="inline">.sol</code> file.
               </li>
               <li>
-                <code className="inline">3</code> ParaCheck checks the branch out, installs
-                its dependencies, compiles and analyses it.
+                <code className="inline">3</code> The analysis runs on your own GitHub Actions
+                runner, authenticated by OIDC. Your source never reaches our servers.
               </li>
               <li>
-                <code className="inline">4</code> A Check Run appears with annotations on the
-                lines involved &mdash; and can gate the merge.
+                <code className="inline">4</code> A Check Run appears with annotations and a
+                reproduce command &mdash; and only a proven finding can gate the merge.
               </li>
             </ul>
           </Panel>
@@ -177,8 +180,9 @@ export default function Home() {
             </ul>
           </Panel>
           <p className="small dim" style={{ marginTop: 14 }}>
-            Analysis runs in an isolated container whose network access is restricted to the
-            hosts a Solidity toolchain needs. The control plane never compiles your code.
+            Analysis runs as a GitHub Actions job on your own runner, authenticated back with a
+            short-lived OIDC token. There is no secret to store, and the control plane never
+            receives a copy of your code.
           </p>
         </Section>
 

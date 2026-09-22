@@ -10,32 +10,33 @@
  */
 
 :root {
-  /* Surfaces */
-  --bg: #f7f7f5;
+  /* IBM Carbon, Gray 10 theme: gray ground, white layers. */
+  --bg: #f4f4f4;
   --surface: #ffffff;
-  --surface-2: #f1f1ee;
+  --surface-2: #e8e8e8;
 
   /* Text */
-  --ink: #111111;
-  --ink-2: #5f5f5a;
-  --ink-3: #85857f;
+  --ink: #161616;
+  --ink-2: #525252;
+  --ink-3: #6f6f6f;
 
   /* Lines */
-  --line: #dcdcd6;
-  --line-strong: #bdbdb6;
+  --line: #e0e0e0;
+  --line-strong: #8d8d8d;
 
-  /* Exactly one accent, used for action and nothing else. */
-  --accent: #1d4ed8;
-  --accent-hover: #1e40af;
+  /* Carbon interactive blue - used for action and nothing else. */
+  --accent: #0f62fe;
+  --accent-hover: #0353e9;
   --accent-ink: #ffffff;
 
-  /* Severity. Small signals, never large backgrounds. */
-  --ok: #16803c;
-  --warn: #a16207;
-  --critical: #b42318;
+  /* Carbon support colours. Small signals, never large backgrounds. */
+  --ok: #24a148;
+  --warn: #8e6a00;
+  --critical: #da1e28;
 
-  --radius: 6px;
-  --radius-sm: 4px;
+  /* Carbon is rectangular: no radius. */
+  --radius: 0;
+  --radius-sm: 0;
 
   --gap: 16px;
   --section-gap: 120px;
@@ -47,37 +48,38 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0e0e0d;
-    --surface: #161615;
-    --surface-2: #1d1d1b;
-    --ink: #f4f4f1;
-    --ink-2: #a8a8a1;
-    --ink-3: #7c7c75;
-    --line: #2a2a27;
-    --line-strong: #3c3c38;
-    --accent: #5b8def;
-    --accent-hover: #7ba4f3;
-    --accent-ink: #0e0e0d;
-    --ok: #3fa76b;
-    --warn: #d0a030;
-    --critical: #e06b5e;
+    /* Carbon Gray 100 theme. */
+    --bg: #161616;
+    --surface: #262626;
+    --surface-2: #393939;
+    --ink: #f4f4f4;
+    --ink-2: #c6c6c6;
+    --ink-3: #a8a8a8;
+    --line: #393939;
+    --line-strong: #6f6f6f;
+    --accent: #4589ff;
+    --accent-hover: #5596ff;
+    --accent-ink: #ffffff;
+    --ok: #42be65;
+    --warn: #d2a106;
+    --critical: #fa4d56;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0e0e0d;
-  --surface: #161615;
-  --surface-2: #1d1d1b;
-  --ink: #f4f4f1;
-  --ink-2: #a8a8a1;
-  --ink-3: #7c7c75;
-  --line: #2a2a27;
-  --line-strong: #3c3c38;
-  --accent: #5b8def;
-  --accent-hover: #7ba4f3;
-  --accent-ink: #0e0e0d;
-  --ok: #3fa76b;
-  --warn: #d0a030;
-  --critical: #e06b5e;
+  --bg: #161616;
+  --surface: #262626;
+  --surface-2: #393939;
+  --ink: #f4f4f4;
+  --ink-2: #c6c6c6;
+  --ink-3: #a8a8a8;
+  --line: #393939;
+  --line-strong: #6f6f6f;
+  --accent: #4589ff;
+  --accent-hover: #5596ff;
+  --accent-ink: #ffffff;
+  --ok: #42be65;
+  --warn: #d2a106;
+  --critical: #fa4d56;
 }
 
 *,
@@ -105,21 +107,24 @@ h2,
 h3,
 h4 {
   margin: 0;
-  font-weight: 600;
-  letter-spacing: -0.021em;
+  font-weight: 400;
+  letter-spacing: 0;
 }
 h1 {
-  font-size: clamp(36px, 6.4vw, 72px);
-  line-height: 1;
-  letter-spacing: -0.035em;
+  font-weight: 300;
+  font-size: clamp(34px, 5vw, 54px);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
 }
 h2 {
-  font-size: clamp(28px, 3.6vw, 40px);
-  line-height: 1.12;
-  letter-spacing: -0.028em;
+  font-weight: 300;
+  font-size: clamp(26px, 3.4vw, 38px);
+  line-height: 1.18;
+  letter-spacing: -0.005em;
 }
 h3 {
   font-size: 18px;
+  font-weight: 400;
   line-height: 1.35;
 }
 p {
@@ -133,6 +138,7 @@ a {
 a:hover {
   color: var(--accent-hover);
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 code,
@@ -194,14 +200,31 @@ pre {
   height: 56px;
 }
 .wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-weight: 600;
   font-size: 15px;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   color: var(--ink);
 }
 .wordmark:hover {
   text-decoration: none;
   color: var(--ink);
+}
+.wordmark-mark {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--accent);
+  position: relative;
+  flex: none;
+}
+.wordmark-mark::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  background: var(--accent);
+  clip-path: polygon(0 55%, 40% 100%, 100% 15%, 85% 0, 40% 70%, 12% 42%);
 }
 .bar nav {
   margin-left: auto;
@@ -243,21 +266,16 @@ main {
 }
 
 .eyebrow {
+  font-family: var(--font-mono), ui-monospace, monospace;
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--ink-3);
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 20px;
-}
-.eyebrow::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--line);
 }
 
 .lede {
@@ -409,9 +427,10 @@ main {
   color: var(--accent-ink);
   font-family: inherit;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 400;
   cursor: pointer;
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+  transition: background-color 110ms cubic-bezier(0.2, 0, 0.38, 0.9),
+    border-color 110ms cubic-bezier(0.2, 0, 0.38, 0.9), color 110ms cubic-bezier(0.2, 0, 0.38, 0.9);
   text-decoration: none;
 }
 .btn:hover {
@@ -425,15 +444,16 @@ main {
   opacity: 0.55;
   cursor: not-allowed;
 }
+/* Carbon tertiary: transparent until hovered, then it fills. */
 .btn.secondary {
-  background: var(--surface);
-  color: var(--ink);
-  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .btn.secondary:hover {
-  background: var(--surface-2);
-  color: var(--ink);
-  border-color: var(--ink-3);
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }
 .btn.small {
   min-height: 34px;
@@ -449,13 +469,15 @@ main {
 
 /* --- Inputs -------------------------------------------------------------- */
 
+/* Carbon text input: a filled field with a single bottom rule, not a box. */
 .field {
   width: 100%;
   min-height: 44px;
   padding: 10px 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border: none;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--surface-2);
   color: var(--ink);
   font-family: inherit;
   font-size: 14px;
@@ -468,7 +490,9 @@ main {
   color: var(--ink-3);
 }
 .field:focus-visible {
-  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-bottom-color: transparent;
 }
 .label {
   display: block;
@@ -487,17 +511,24 @@ table {
 }
 th {
   text-align: left;
-  padding: 10px 14px;
+  padding: 12px 16px;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--ink-3);
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface-2);
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
 }
 td {
-  padding: 13px 14px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
+}
+tbody tr {
+  transition: background-color 110ms cubic-bezier(0.2, 0, 0.38, 0.9);
+}
+tbody tr:hover {
+  background: var(--surface-2);
 }
 tr:last-child td {
   border-bottom: none;

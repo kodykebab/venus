@@ -11,6 +11,7 @@ export function SiteHeader() {
     <header className="bar">
       <div className="wrap">
         <Link className="wordmark" href="/">
+          <span className="wordmark-mark" aria-hidden="true" />
           ParaCheck
         </Link>
         <nav>
