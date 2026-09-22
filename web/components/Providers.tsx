@@ -2,6 +2,8 @@
 
 import { ClerkProvider } from "@clerk/clerk-react";
 
+import { ClerkTokenBridge } from "./ClerkTokenBridge";
+
 /**
  * Clerk, client-side only.
  *
@@ -29,5 +31,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <ClerkProvider publishableKey={publishableKey}>{children}</ClerkProvider>;
+  // The token bridge lives here, not on the dashboard, so that every page -
+  // pricing especially - can make an authenticated call. Mounted once at the
+  // root it also can't fight a second copy for the getter on navigation.
+  return (
+    <ClerkProvider publishableKey={publishableKey}>
+      <ClerkTokenBridge />
+      {children}
+    </ClerkProvider>
+  );
 }

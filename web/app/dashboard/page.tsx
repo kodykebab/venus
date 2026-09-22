@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { SignedIn, SignedOut, SignInButton } from "@clerk/clerk-react";
 
-import { ClerkTokenBridge } from "@/components/ClerkTokenBridge";
 import { Dashboard } from "@/components/Dashboard";
 import { SiteHeader } from "@/components/SiteHeader";
 import { EmptyState, Section } from "@/components/ui";
@@ -39,7 +38,6 @@ export default function DashboardPage() {
           </Section>
         </SignedOut>
         <SignedIn>
-          <ClerkTokenBridge />
           <Dashboard />
         </SignedIn>
       </main>
