@@ -404,8 +404,8 @@ export async function proposeWorkflowFile(
         ok: false,
         reason:
           "ParaCheck doesn't have permission to write to this repository yet. " +
-          "The GitHub App needs Contents and Pull requests permissions - reinstall " +
-          "after they're granted, or add the workflow file yourself.",
+          "Creating a branch needs the GitHub App's Contents write permission - grant it, " +
+          "approve the update on the installation, then try again, or add the workflow file yourself.",
       };
     }
     return { ok: false, reason: `Could not create a branch (${branchResponse.status}).` };
